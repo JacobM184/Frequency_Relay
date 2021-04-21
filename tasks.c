@@ -17,11 +17,11 @@
 #include "tasks.h"
 
 //Global Variables
-uint8_t modeSelect = 0; // 0 - Stable | 1 - Load Management | 2 - Maintenance
+extern int modeSelect;
 
-uint8_t uiSwitchValue; //
+//Global
+uint8_t uiSwitchValue;
 uint8_t ledValue;
-
 
 void stable_task(void *pvParameter){
     while(1){
@@ -48,8 +48,8 @@ void led_update_task(void *pvParameter){
         LEDs = ~ledValue & 0x1F;
 
         if (modeSelect == 0){
-            IOWR_AVALON_ALTERA_PIO_DATA(RED_LEDS_BASE, (~IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE)) & 0X1F);
-            switch_state = 
+            IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE, (~IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE)) & 0X1F);
+
         }
     }
 }
