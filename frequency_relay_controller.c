@@ -14,30 +14,20 @@
 #include "freertos/semphr.h"
 #include "FreeRTOS/timers.h"
 
-#include "interrupts.h"
 #include "tasks.h"
+
+//Task Priorities
+#define LED_UPDATE_TASK_PRIORITY			4
+
 // Definition of Task Stacks
 #define   TASK_STACKSIZE       2048
-
-
-// Definition of Task Priorities
-#define LED_CONTROL_TASK_PRIORITY			4
-#define SWITCH_POLL_TASK_PRIORITY 			4
-
-#define FREQ_CALC_TASK_PRIORITY 			3
-#define MANAGE_LOADS_TASK_PRIORITY 			3
-#define STABILITY_MONITOR_TASK_PRIORITY 	3
-
-#define LCD_TASK_PRIORITY 					1
-
-#define TIMER_TASK_PRIORITY 				11
 
 // Definition of Message Queue
 #define   MSG_QUEUE_SIZE  100
 QueueHandle_t msgqueue;
 static QueueHandle_t Q_freq_data;
-static QueueHandle_t Q_stab_data;
-static QueueHandle_t Q_sys_stab;
+
+
 
 //timer
 TimerHandle_t timer;
@@ -50,7 +40,7 @@ int initOSDataStructs(void);
 int initCreateTasks(void);
 
 //global variable
-int modeSelect = 1;
+int modeSelect = 0; //0 - Stable, 1 - Load Management, 2 - Maintenance
 
 void freq_relay(){
 	#define SAMPLING_FREQ 16000.0
@@ -67,10 +57,12 @@ void button_interrupt_isr()
 	xSemaphoreGiveFromISR(led_sem, 0);
 
 	if (modeSelect == 0){
-	  modeSelect = 1;
+		printf("Maintenance Mode\n");
+	  modeSelect = 2;
 	  xTimerStopFromISR(timer,0);
 	} else {
 	  modeSelect = 0;
+		printf("Stable Mode\n");
 	  xTimerStartFromISR(timer,0);
 	}
 
@@ -82,10 +74,8 @@ void button_interrupt_isr()
 
 int main(int argc, char* argv[], char* envp[])
 {
-//	double arr[2];
+
 	Q_freq_data = xQueueCreate( 100, sizeof(double) );
-	Q_sys_stab = xQueueCreate( 1, sizeof(int) );
-	Q_stab_data = xQueueCreate( 10, (sizeof(double)*2.0) );
 
 	initOSDataStructs();
 	initCreateTasks();
@@ -96,7 +86,7 @@ int main(int argc, char* argv[], char* envp[])
 	alt_irq_register(FREQUENCY_ANALYSER_IRQ, 0, freq_relay);
 
 	//Timer
-	timer = xTimerCreate("Load Shed Timer", pdMS_TO_TICKS(500), pdTRUE, NULL, vTimerCallback);
+//	timer = xTimerCreate("Load Shed Timer", pdMS_TO_TICKS(500), pdTRUE, NULL, vTimerCallback);
 
 	vTaskStartScheduler();
 
@@ -118,6 +108,6 @@ int initOSDataStructs(void)
 int initCreateTasks(void)
 {
 
-
+	xTaskCreate(led_update_task, "led_update_task", TASK_STACKSIZE, NULL, LED_UPDATE_TASK_PRIORITY, NULL);
 	return 0;
 }
