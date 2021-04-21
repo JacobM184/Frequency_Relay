@@ -34,9 +34,10 @@ int initOSDataStructs(void);
 int initCreateTasks(void);
 
 // Task Priorities
+#define SWITCH_POLL_PRIORITY	1
+#define LED_CTRL_PRIORITY		2
 #define FREQ_CALC_PRIORITY		3
 #define STABILITY_TASK_PRIORITY 4
-#define SWITCH_POLL_PRIORITY	1
 
 // Global Variables
 uint8_t stability = 1;
@@ -103,10 +104,16 @@ void switch_poll_task(void *pvParameter){
 void led_control_task(void *pvParameter){
 	while(1){
 		if(uxSempahoreGetCount(mode_sem) == 1){
-			//load manange
+			//load manange LED 
 		}else{
-			//maintenance mode
+			//maintenance mode LED
 		}
+
+	}
+}
+
+void load_manage_task(void *pvParameter){
+	while(1){
 
 	}
 }
@@ -143,6 +150,7 @@ int initCreateTasks(void)
 	xCreateTask(freq_calc_task, "freq_calc_task", TASK_STACKSIZE, NULL, FREQ_CALC_PRIORITY, NULL);
 	xCreateTask(stability_task, "stability_task", TASK_STACKSIZE, NULL, STABILITY_TASK_PRIORITY, NULL);
 	xCreateTask(switch_poll_task, "switch_poll_task", TASK_STACKSIZE, NULL, SWITCH_POLL_PRIORITY, NULL);
+	xCreateTask(led_control_task, "led_control_task", TASK_STACKSIZE, NULL, LED_CTRL_PRIORITY, NULL);
 
 	return 0;
 }
