@@ -18,7 +18,8 @@
 #define MAINTAIN				1
 #define LOADMANAGE				0
 
-
+//lcd
+FILE *lcd;
 // Definition of Task Stacks
 #define   TASK_STACKSIZE       2048
 
@@ -42,10 +43,11 @@ int initCreateTasks(void);
 
 // Task Priorities
 #define SWITCH_POLL_PRIORITY		1
-#define LED_CTRL_PRIORITY			2
-#define FREQ_CALC_PRIORITY			3
-#define STABILITY_TASK_PRIORITY 	4
-#define LOAD_MANAGE_PRIORITY		5
+#define LCD_PRIORITY				2
+#define LED_CTRL_PRIORITY			3
+#define FREQ_CALC_PRIORITY			4
+#define STABILITY_TASK_PRIORITY 	5
+#define LOAD_MANAGE_PRIORITY		6
 
 
 // Global Variables
@@ -133,51 +135,59 @@ void stability_task(void *pvParameter){
 
 void load_manage_task(void *pvParameter){
 	uint8_t rec_stability;
+	uint8_t load_op;
 	while(1){
 
 		xSemaphoreTake(stablephore,portMAX_DELAY);
 		xQueueReceive(Q_stability,&rec_stability,0);
 
 		printf("Rec Stab: %d\n",rec_stability);
+		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
 		if (rec_stability == 0){
-			printf("Unstable\n");
+//			printf("Unstable\n");
 			shed_loads();
+
 		} else {
-			printf("Stable\n");
+//			printf("Stable\n");
 			reconnect_loads();
-			if (check_loads()){
-				mode=STABLE;
-			}
+//			if (check_loads()){
+//				mode=STABLE;
+//			}
 		}
+
+
 	}
 }
 
 void shed_loads(){
 	uint8_t i;
-	uint8_t ledValue;
+	uint8_t ledValueR,ledValueG;
 
 	for (i = 0x1; i<=0x1F ;i*=2){
 		if (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)& i){
-			ledValue = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)&(~i)) & 0x1F;
-			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValue);
-			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValue);
-			printf("LED Value: %d\n",ledValue);
+
+			ledValueR = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)&(~i)) & 0x1F;
+			ledValueG = (IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE) || i) & 0x1F;
+
+			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+
 			break;
 		}
 	}
 
-
 }
 
 void reconnect_loads(){
-	saveSwitch = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+
 	uint8_t i;
-	uint8_t ledValue,ledValue2;
+	uint8_t ledValueR,ledValueG;
 	for (i = get_i(saveSwitch); i > 0; i/=2){
-		ledValue = (IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE)||(i))& 0x1F;
-		ledValue2 = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)||(i))& 0x1F;
-		IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValue);
-		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValue2);
+		ledValueG = (IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE)&(~i)) & 0x1F;
+		ledValueR = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) || i) & 0x1F;
+
+		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+		IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 	}
 }
 
@@ -210,15 +220,19 @@ uint8_t check_loads(){
 
 void switch_poll_task(void *pvParameter){
 	uint8_t prevSwitchState = 0x0;
+	uint8_t switchState;
 	while(1){
-
-		uint8_t switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+		if(mode == MAINTAIN || mode == STABLE){
+			switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+		}else{
+			switchState = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			saveSwitch = switchState;
+		}
 
 		if (prevSwitchState != switchState){
 			xQueueSend(Q_switch_state, &switchState,0);
 		}
 		prevSwitchState = switchState;
-
 
 	}
 }
@@ -226,17 +240,31 @@ void switch_poll_task(void *pvParameter){
 void led_control_task(void *pvParameter){
 	uint8_t rec_switchState;
 	uint8_t loadLEDs;
+	uint8_t rec_load_op;
 	while(1){
 		if (mode == MAINTAIN || mode == STABLE){
 			xQueueReceive(Q_switch_state,&rec_switchState,portMAX_DELAY);
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,rec_switchState);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,0x0);
 		} else {
-//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
+
+
+
+
 		}
 	}
 }
 
+void lcd_task(void *pvParameter){
+	  lcd = fopen(CHARACTER_LCD_NAME, "w");
+	while (1){
+		#define ESC 27
+        #define CLEAR_LCD_STRING "[2J"
+        fprintf(lcd, "%c%s", ESC, CLEAR_LCD_STRING);
+        fprintf(lcd, "Mode: %d\n", mode);
+        vTaskDelay(100);
+	}
+}
 void vTimerCallback(xTimerHandle t_timer){
 	xSemaphoreGive(stablephore);
 }
@@ -271,7 +299,6 @@ int initOSDataStructs(void)
 	Q_switch_state = xQueueCreate(10, sizeof(uint8_t));
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 
-
 	stablephore = xSemaphoreCreateBinary();
 	return 0;
 }
@@ -285,6 +312,7 @@ int initCreateTasks(void)
 
 	xTaskCreate(switch_poll_task, "switch_poll_task", TASK_STACKSIZE, NULL, SWITCH_POLL_PRIORITY, NULL);
 	xTaskCreate(led_control_task, "led_control_task", TASK_STACKSIZE, NULL, LED_CTRL_PRIORITY, NULL);
+	xTaskCreate(lcd_task, "lcd_task", TASK_STACKSIZE, NULL, LCD_PRIORITY, NULL);
 
 	return 0;
 }
