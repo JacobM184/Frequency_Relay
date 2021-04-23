@@ -35,6 +35,7 @@ TimerHandle_t timer500;
 
 // Definition of Semaphore
 SemaphoreHandle_t stablephore;
+SemaphoreHandle_t LEDaphore;
 
 
 // Local Function Prototypes
@@ -53,7 +54,10 @@ int initCreateTasks(void);
 // Global Variables
 uint8_t stability = 1;
 uint8_t saveSwitch = 0x0;
+uint8_t saveSwitch2 = 0x0;
 uint8_t prevStability = 1;
+uint8_t ledValueG = 0x0;
+uint8_t ledValueR = 0x0;
 
 uint8_t mode = MAINTAIN;
 
@@ -63,6 +67,7 @@ uint8_t get_i(uint8_t switch_state);
 void reconnect_loads();
 uint8_t check_loads();
 
+
 void freq_relay(){
 	#define SAMPLING_FREQ 16000.0
 	double temp = SAMPLING_FREQ/(double)IORD(FREQUENCY_ANALYSER_BASE, 0);
@@ -71,38 +76,64 @@ void freq_relay(){
 }
 
 void button_isr(){
+
+	// condition for changing to load management
 	if (mode == MAINTAIN){
 		mode = LOADMANAGE;
 		printf("MODE: %d\n",mode);
-		xTimerStartFromISR(timer500,0);
-		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 
-	} else {
+		// start timer to being load management
+		xTimerStartFromISR(timer500,0);
+
+		// save the switch state at the moment of mode change
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+		saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+
+		// save the Red LED state at the moment of mode change
+		ledValueR = saveSwitch;
+		ledValueG = 0x0;
+
+	} else { // condition for changing to maintenance mode
 		mode = MAINTAIN;
 		printf("MODE: %d\n",mode);
+
+		// stop the timer
 		xTimerStopFromISR(timer500,0);
 	}
 
+	// clear edge capture register
 	IOWR_ALTERA_AVALON_PIO_EDGE_CAP(PUSH_BUTTON_BASE, 0x7);
 }
 
 void freq_calc_task(void *pvParameter){
+
+	// intialise arrays to hold frequency and RoC of frequency data
 	double freq[100], dfreq[100], freqData[2];
+
+	// initialise i
 	int i = 99;
 
 	while(1){
+
+		// receive frequwncy data from freq_relay()
 		xQueueReceive(Q_freq_calc, freq+i, portMAX_DELAY);
 
+		// calculate RoC
 		if(i==0){
 			dfreq[0] = (freq[0]-freq[99]) * 2.0 * freq[0] * freq[99] / (freq[0]+freq[99]);
 		}
 		else{
 			dfreq[i] = (freq[i]-freq[i-1]) * 2.0 * freq[i]* freq[i-1] / (freq[i]+freq[i-1]);
 		}
+
+		// store frequency
 		freqData[0] = freq[i];
+		// store RoC of frequency
 		freqData[1] = dfreq[i];
 
 //			printf("Freq: %f\n",freq[i]);
+		
+		// send data
 		xQueueSend(Q_freq_data,freqData,0);
 
 		i =	++i%100; //point to the next data (oldest) to be overwritten
@@ -113,10 +144,15 @@ void freq_calc_task(void *pvParameter){
 
 void stability_task(void *pvParameter){
 
+	//  initialise variable to store freq and RoC
 	double freqData[2];
+
 	while(1){
+
+		// recieve data from freq_calc_task()
 		xQueueReceive(Q_freq_data, freqData, portMAX_DELAY);
 
+		// check if data violates set thresholds
 		if((freqData[0] < FREQ_THRESHOLD) || (freqData[1] > ROC_THRESHOLD)){
 			stability = 0;
 
@@ -125,34 +161,62 @@ void stability_task(void *pvParameter){
 		}
 
 //		printf("Stab: %d\n",stability);
+
+		// reset timer on stability stae change
 		if((stability != prevStability) && (mode != MAINTAIN)){
 			xTimerReset(timer500,0);
 			prevStability = stability;
 		}
+
+		// send stability state
 		xQueueSend(Q_stability, &stability,0);
 	}
 }
 
 void load_manage_task(void *pvParameter){
+
+	// initialise variable to store recieved data
 	uint8_t rec_stability;
-	uint8_t load_op;
+	// uint8_t load_op;
 	while(1){
 
+		// blocking SemaphoreTake function to ensure that the task is blocked until timer times out
 		xSemaphoreTake(stablephore,portMAX_DELAY);
+
+		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
 
-		printf("Rec Stab: %d\n",rec_stability);
-		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
+		// IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
+		
+		// check value of stbaility state
 		if (rec_stability == 0){
-//			printf("Unstable\n");
+			printf("Unstable\n");
+
+			// if the mode is stable, but state is unstable, change mode
+			if(mode == STABLE){
+				mode = LOADMANAGE;
+				saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			}
+			// shed loads when unstable
 			shed_loads();
 
 		} else {
-//			printf("Stable\n");
-			reconnect_loads();
-//			if (check_loads()){
-//				mode=STABLE;
-//			}
+
+			printf("Getting stable\n");
+			 //check if all loads are connected when stable state
+
+
+
+			if (check_loads()){
+				mode=STABLE;
+				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+				printf("Mode is STABLE\n");
+			}else{
+
+				// reconnect loads if all loads not reconnected
+				reconnect_loads();
+
+			}
 		}
 
 
@@ -160,48 +224,91 @@ void load_manage_task(void *pvParameter){
 }
 
 void shed_loads(){
+
+	// intitalise i
 	uint8_t i;
-	uint8_t ledValueR,ledValueG;
 
-	for (i = 0x1; i<=0x1F ;i*=2){
-		if (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)& i){
+	// for loop to check if any of the leds are 'on', individually
+	for (i = 0x1; i<=0x1F; i*=2){
 
-			ledValueR = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE)&(~i)) & 0x1F;
-			ledValueG = (IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE) || i) & 0x1F;
+		// update saveSwitch
+		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 
-			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+		// check if load is 'on'
+		if ((saveSwitch & i) != 0){
 
+			// update Red LED value
+			ledValueR = ledValueR & saveSwitch;
+			ledValueR = (ledValueR & (~i));
+			saveSwitch = ledValueR;
+
+
+			// update Green LED value
+			ledValueG = (ledValueG | i) ;
+			printf("LED G: %d | I: %d\n",ledValueG,i);
+			// update Red and Green LEDs
+//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+
+			//break from loop
+			xSemaphoreGive(LEDaphore);
 			break;
 		}
 	}
-
 }
 
 void reconnect_loads(){
 
+	// initialise i
 	uint8_t i;
-	uint8_t ledValueR,ledValueG;
-	for (i = get_i(saveSwitch); i > 0; i/=2){
-		ledValueG = (IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE)&(~i)) & 0x1F;
-		ledValueR = (IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) || i) & 0x1F;
 
-		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-		IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+	// update saveSwitch state
+	if (saveSwitch == 0){
+		saveSwitch = ledValueG;
+	} else{
+		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+	}
+	
+	// for loop to cycle through Green LEDs that are on, starting from highest priority
+	for (i = get_i(saveSwitch); i > 0; i/=2){
+
+		// check if GreenLED on
+		if(ledValueG & i){
+
+			// update Green LED value
+			ledValueG = (ledValueG & (~i)) & 0x1F;
+
+			// update Red LED value
+			ledValueR = ledValueR & saveSwitch;
+			ledValueR = (ledValueR | i) & 0x1F;
+			saveSwitch = ledValueR;
+
+			// update Red and Green LEDs
+//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+
+			// break from loop
+			xSemaphoreGive(LEDaphore);
+			break;
+		}
 	}
 }
 
 uint8_t get_i(uint8_t switch_state){
+
+	// initialise i
 	uint8_t i;
+
+	// check if switch state between 11111 and 10000
 	if(switch_state <= 0x1F && switch_state >= 0x10){
 		i = 0x10;
-	}else if(switch_state < 0x10 && switch_state >= 0x8){
+	}else if(switch_state < 0x10 && switch_state >= 0x8){ // check if switch state between 10000 and 01000
 		i = 0x8;
-	}else if(switch_state < 0x8 && switch_state >= 0x4){
+	}else if(switch_state < 0x8 && switch_state >= 0x4){ // check if switch state between 01000 and 00100
 		i = 0x4;
-	}else if(switch_state < 0x4 && switch_state >= 0x2){
+	}else if(switch_state < 0x4 && switch_state >= 0x2){ // check if switch state between 00100 and 00010
 		i = 0x2;
-	}else if(switch_state < 0x2 && switch_state >= 0x1){
+	}else if(switch_state < 0x2 && switch_state >= 0x1){ // check if switch state between 00010 and 00001
 		i = 0x1;
 	}else{
 		i = 0x0;
@@ -211,61 +318,100 @@ uint8_t get_i(uint8_t switch_state){
 
 uint8_t check_loads(){
 
-	if(IORD_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE)== saveSwitch){
+	printf("Prev Save Switch 2: %d\n", saveSwitch2);
+
+	saveSwitch2 = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch2);
+	printf("After Save Switch 2: %d\n", saveSwitch2);
+	// check if the Red LEDs are == to the saved switch state
+	if(ledValueR == saveSwitch2 && ledValueG == 0){
+//		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE));
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 1;
 	} else{
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 0;
 	}
 }
 
 void switch_poll_task(void *pvParameter){
-	uint8_t prevSwitchState = 0x0;
+	// uint8_t prevSwitchState = 0x0;
+
+	// initialise vairiable for temporary storage of switch state
 	uint8_t switchState;
 	while(1){
 		if(mode == MAINTAIN || mode == STABLE){
 			switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
-		}else{
-			switchState = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
-			saveSwitch = switchState;
 		}
+		
+		// else{
+		// 	switchState = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+		// 	saveSwitch = switchState;
+		// }
 
-		if (prevSwitchState != switchState){
-			xQueueSend(Q_switch_state, &switchState,0);
-		}
-		prevSwitchState = switchState;
+		// if (prevSwitchState != switchState){
+		// 	xQueueSend(Q_switch_state, &switchState,0);
+		// }
+		// prevSwitchState = switchState;
 
+		// send switch state
+		xQueueSend(Q_switch_state, &switchState,0);
 	}
 }
 
 void led_control_task(void *pvParameter){
+
+	// initialise variable to receive switch state
 	uint8_t rec_switchState;
-	uint8_t loadLEDs;
-	uint8_t rec_load_op;
+
+	// uint8_t loadLEDs;
+	// uint8_t rec_load_op;
+
 	while(1){
+
+		// check if mode is Maintenance or stability
 		if (mode == MAINTAIN || mode == STABLE){
+
+			// receive switch state from switch_poll_task()
 			xQueueReceive(Q_switch_state,&rec_switchState,portMAX_DELAY);
+
+			// update Red LEDS
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,rec_switchState);
+
+			// turn off Green LEDs
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,0x0);
-		} else {
-
-
-
-
+		}else{
+			xSemaphoreTake(LEDaphore, 100);
+			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+			//vTaskDelay(50);
 		}
 	}
+
+
 }
 
 void lcd_task(void *pvParameter){
-	  lcd = fopen(CHARACTER_LCD_NAME, "w");
+
+	// open LCD file in write mode
+	lcd = fopen(CHARACTER_LCD_NAME, "w");
+
 	while (1){
+
+		// clear display
 		#define ESC 27
         #define CLEAR_LCD_STRING "[2J"
         fprintf(lcd, "%c%s", ESC, CLEAR_LCD_STRING);
+
+		// print mode
         fprintf(lcd, "Mode: %d\n", mode);
+
+		// delay to stop flickering
         vTaskDelay(100);
 	}
 }
 void vTimerCallback(xTimerHandle t_timer){
+
+	// give binary semaphore when timer times out
 	xSemaphoreGive(stablephore);
 }
 
@@ -273,15 +419,26 @@ int main(int argc, char* argv[], char* envp[])
 {
 
 
-
+	// intialise tasks, queues and semaphores
 	initOSDataStructs();
 	initCreateTasks();
+
+	// clear edge capture register for push buttons
 	IOWR_ALTERA_AVALON_PIO_EDGE_CAP(PUSH_BUTTON_BASE, 0x7);
+
+	// create a interrupt mask for push buttons
 	IOWR_ALTERA_AVALON_PIO_IRQ_MASK(PUSH_BUTTON_BASE, 0x4);
-	alt_irq_register(FREQUENCY_ANALYSER_IRQ, 0, freq_relay);
+
+	// register push button interrupt
 	alt_irq_register(PUSH_BUTTON_IRQ, 0, button_isr);
 
+	// register frequency analyser interrupt
+	alt_irq_register(FREQUENCY_ANALYSER_IRQ, 0, freq_relay);
+
+	// create timer
 	timer500 = xTimerCreate("Timer500", pdMS_TO_TICKS(500), pdTRUE, NULL, vTimerCallback);
+
+	// start the task scheduler
 	vTaskStartScheduler();
 
 	while(1){
@@ -291,7 +448,7 @@ int main(int argc, char* argv[], char* envp[])
   return 0;
 }
 
-// This function simply creates a message queue and a semaphore
+// This function simply creates message queue(s) and semaphore(s)
 int initOSDataStructs(void)
 {
 	Q_freq_calc = xQueueCreate(100, sizeof(double));
@@ -300,6 +457,7 @@ int initOSDataStructs(void)
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 
 	stablephore = xSemaphoreCreateBinary();
+	LEDaphore = xSemaphoreCreateBinary();
 	return 0;
 }
 
