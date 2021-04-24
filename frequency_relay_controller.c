@@ -35,6 +35,7 @@ TimerHandle_t timer500;
 
 // Definition of Semaphore
 SemaphoreHandle_t stablephore;
+SemaphoreHandle_t LEDaphore;
 
 
 // Local Function Prototypes
@@ -53,6 +54,7 @@ int initCreateTasks(void);
 // Global Variables
 uint8_t stability = 1;
 uint8_t saveSwitch = 0x0;
+uint8_t saveSwitch2 = 0x0;
 uint8_t prevStability = 1;
 uint8_t ledValueG = 0x0;
 uint8_t ledValueR = 0x0;
@@ -80,11 +82,16 @@ void button_isr(){
 		mode = LOADMANAGE;
 		printf("MODE: %d\n",mode);
 
-		// starty timer to being load management
+		// start timer to being load management
 		xTimerStartFromISR(timer500,0);
 
 		// save the switch state at the moment of mode change
 		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+		saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+
+		// save the Red LED state at the moment of mode change
+		ledValueR = saveSwitch;
+		ledValueG = 0x0;
 
 		// save the Red LED state at the moment of mode change
 		ledValueR = saveSwitch;
@@ -189,10 +196,12 @@ void load_manage_task(void *pvParameter){
 		// check value of stbaility state
 		if (rec_stability == 0){
 //			printf("Unstable\n");
+			printf("Unstable\n");
 
 			// if the mode is stable, but state is unstable, change mode
 			if(mode == STABLE){
 				mode = LOADMANAGE;
+				saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			}
 			// shed loads when unstable
 			shed_loads();
@@ -204,10 +213,20 @@ void load_manage_task(void *pvParameter){
 			// check if all loads are connected when stable state
 			if (check_loads()){
 				mode=STABLE;
+			printf("Getting stable\n");
+			 //check if all loads are connected when stable state
+
+
+
+			if (check_loads()){
+				mode=STABLE;
+				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+				printf("Mode is STABLE\n");
 			}else{
 
 				// reconnect loads if all loads not reconnected
 				reconnect_loads();
+
 			}
 		}
 
@@ -221,29 +240,32 @@ void shed_loads(){
 	uint8_t i;
 
 	// for loop to check if any of the leds are 'on', individually
-	for (i = 0x1; i<=0x1F ;i*=2){
+	for (i = 0x1; i<=0x1F; i*=2){
 
 		// update saveSwitch
 		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 
 		// check if load is 'on'
-		if (saveSwitch & i){
+		if ((saveSwitch & i) != 0){
 
 			// update Red LED value
-			ledValueR = (ledValueR & (~i)) & 0x1F;
+			ledValueR = ledValueR & saveSwitch;
+			ledValueR = (ledValueR & (~i));
+			saveSwitch = ledValueR;
+
 
 			// update Green LED value
-			ledValueG = (ledValueG | i) & 0x1F;
-
+			ledValueG = (ledValueG | i) ;
+			printf("LED G: %d | I: %d\n",ledValueG,i);
 			// update Red and Green LEDs
-			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 
 			//break from loop
-			return;
+			xSemaphoreGive(LEDaphore);
+			break;
 		}
 	}
-
 }
 
 void reconnect_loads(){
@@ -252,7 +274,11 @@ void reconnect_loads(){
 	uint8_t i;
 
 	// update saveSwitch state
-	saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+	if (saveSwitch == 0){
+		saveSwitch = ledValueG;
+	} else{
+		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+	}
 	
 	// for loop to cycle through Green LEDs that are on, starting from highest priority
 	for (i = get_i(saveSwitch); i > 0; i/=2){
@@ -261,17 +287,20 @@ void reconnect_loads(){
 		if(ledValueG & i){
 
 			// update Green LED value
-			ledValueG = ledValueG & (~i)) & 0x1F;
+			ledValueG = (ledValueG & (~i)) & 0x1F;
 
 			// update Red LED value
+			ledValueR = ledValueR & saveSwitch;
 			ledValueR = (ledValueR | i) & 0x1F;
+			saveSwitch = ledValueR;
 
 			// update Red and Green LEDs
-			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 
 			// break from loop
-			return;
+			xSemaphoreGive(LEDaphore);
+			break;
 		}
 	}
 }
@@ -299,10 +328,18 @@ uint8_t get_i(uint8_t switch_state){
 }
 
 uint8_t check_loads(){
+
+	printf("Prev Save Switch 2: %d\n", saveSwitch2);
+
+	saveSwitch2 = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch2);
+	printf("After Save Switch 2: %d\n", saveSwitch2);
 	// check if the Red LEDs are == to the saved switch state
-	if(ledValueR == saveSwitch){
+	if(ledValueR == saveSwitch2 && ledValueG == 0){
+//		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE));
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 1;
 	} else{
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 0;
 	}
 }
@@ -353,8 +390,15 @@ void led_control_task(void *pvParameter){
 
 			// turn off Green LEDs
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,0x0);
+		}else{
+			xSemaphoreTake(LEDaphore, 100);
+			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
+			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+			//vTaskDelay(50);
 		}
 	}
+
+
 }
 
 void lcd_task(void *pvParameter){
@@ -424,6 +468,7 @@ int initOSDataStructs(void)
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 
 	stablephore = xSemaphoreCreateBinary();
+	LEDaphore = xSemaphoreCreateBinary();
 	return 0;
 }
 
