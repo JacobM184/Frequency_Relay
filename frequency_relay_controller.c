@@ -93,9 +93,6 @@ void button_isr(){
 		ledValueR = saveSwitch;
 		ledValueG = 0x0;
 
-		// save the Red LED state at the moment of mode change
-		ledValueR = saveSwitch;
-
 	} else { // condition for changing to maintenance mode
 		mode = MAINTAIN;
 		printf("MODE: %d\n",mode);
@@ -189,13 +186,10 @@ void load_manage_task(void *pvParameter){
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
 
-		printf("Rec Stab: %d\n",rec_stability);
-
 		// IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
 		
 		// check value of stbaility state
 		if (rec_stability == 0){
-//			printf("Unstable\n");
 			printf("Unstable\n");
 
 			// if the mode is stable, but state is unstable, change mode
@@ -205,14 +199,10 @@ void load_manage_task(void *pvParameter){
 			}
 			// shed loads when unstable
 			shed_loads();
+			xSemaphoreGive(LEDaphore);
 
 		} else {
 
-//			printf("Stable\n");
-
-			// check if all loads are connected when stable state
-			if (check_loads()){
-				mode=STABLE;
 			printf("Getting stable\n");
 			 //check if all loads are connected when stable state
 
@@ -220,12 +210,13 @@ void load_manage_task(void *pvParameter){
 
 			if (check_loads()){
 				mode=STABLE;
-				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+				saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				printf("Mode is STABLE\n");
 			}else{
 
 				// reconnect loads if all loads not reconnected
 				reconnect_loads();
+				xSemaphoreGive(LEDaphore);
 
 			}
 		}
@@ -262,7 +253,7 @@ void shed_loads(){
 //			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 
 			//break from loop
-			xSemaphoreGive(LEDaphore);
+			// xSemaphoreGive(LEDaphore);
 			break;
 		}
 	}
@@ -299,7 +290,7 @@ void reconnect_loads(){
 //			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 
 			// break from loop
-			xSemaphoreGive(LEDaphore);
+			// xSemaphoreGive(LEDaphore);
 			break;
 		}
 	}
