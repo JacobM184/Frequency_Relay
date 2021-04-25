@@ -87,7 +87,7 @@ void button_isr(){
 
 		// save the switch state at the moment of mode change
 		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
-		saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+//		saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 
 		// save the Red LED state at the moment of mode change
 		ledValueR = saveSwitch;
@@ -132,7 +132,7 @@ void freq_calc_task(void *pvParameter){
 		freqData[1] = dfreq[i];
 
 //			printf("Freq: %f\n",freq[i]);
-		
+
 		// send data
 		xQueueSend(Q_freq_data,freqData,0);
 
@@ -187,15 +187,16 @@ void load_manage_task(void *pvParameter){
 		xQueueReceive(Q_stability,&rec_stability,0);
 
 		// IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
-		
+		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+		ledValueR = saveSwitch;
 		// check value of stbaility state
 		if (rec_stability == 0){
 			printf("Unstable\n");
 
 			// if the mode is stable, but state is unstable, change mode
 			if(mode == STABLE){
+				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				mode = LOADMANAGE;
-				saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			}
 			// shed loads when unstable
 			shed_loads();
@@ -209,12 +210,14 @@ void load_manage_task(void *pvParameter){
 
 
 			if (check_loads()){
+				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+				ledValueR = saveSwitch;
 				mode=STABLE;
-				saveSwitch2 = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				printf("Mode is STABLE\n");
 			}else{
 
 				// reconnect loads if all loads not reconnected
+				//ledValueR = ledValueR & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				reconnect_loads();
 				xSemaphoreGive(LEDaphore);
 
@@ -226,7 +229,6 @@ void load_manage_task(void *pvParameter){
 }
 
 void shed_loads(){
-
 	// intitalise i
 	uint8_t i;
 
@@ -234,20 +236,20 @@ void shed_loads(){
 	for (i = 0x1; i<=0x1F; i*=2){
 
 		// update saveSwitch
-		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+//		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 
 		// check if load is 'on'
 		if ((saveSwitch & i) != 0){
+
+
 
 			// update Red LED value
 			ledValueR = ledValueR & saveSwitch;
 			ledValueR = (ledValueR & (~i));
 			saveSwitch = ledValueR;
 
-
 			// update Green LED value
 			ledValueG = (ledValueG | i) ;
-			printf("LED G: %d | I: %d\n",ledValueG,i);
 			// update Red and Green LEDs
 //			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
 //			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
@@ -262,28 +264,33 @@ void shed_loads(){
 void reconnect_loads(){
 
 	// initialise i
-	uint8_t i;
+	uint8_t i,j;
 
 	// update saveSwitch state
 	if (saveSwitch == 0){
 		saveSwitch = ledValueG;
-	} else{
-		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 	}
-	
+//	else{
+//		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+//	}
+
 	// for loop to cycle through Green LEDs that are on, starting from highest priority
 	for (i = get_i(saveSwitch); i > 0; i/=2){
 
 		// check if GreenLED on
 		if(ledValueG & i){
 
+			j = i & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+
 			// update Green LED value
 			ledValueG = (ledValueG & (~i)) & 0x1F;
 
 			// update Red LED value
-			ledValueR = ledValueR & saveSwitch;
-			ledValueR = (ledValueR | i) & 0x1F;
-			saveSwitch = ledValueR;
+
+			if(j){
+				ledValueR = ((ledValueR | j) & 0x1F) ;
+				saveSwitch = ledValueR;
+			}
 
 			// update Red and Green LEDs
 //			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
@@ -320,17 +327,14 @@ uint8_t get_i(uint8_t switch_state){
 
 uint8_t check_loads(){
 
-	printf("Prev Save Switch 2: %d\n", saveSwitch2);
-
-	saveSwitch2 = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch2);
-	printf("After Save Switch 2: %d\n", saveSwitch2);
+	//saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 	// check if the Red LEDs are == to the saved switch state
-	if(ledValueR == saveSwitch2 && ledValueG == 0){
+	if(ledValueG == 0){
 //		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE));
 		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 1;
 	} else{
-		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+//		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		return 0;
 	}
 }
@@ -344,7 +348,7 @@ void switch_poll_task(void *pvParameter){
 		if(mode == MAINTAIN || mode == STABLE){
 			switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 		}
-		
+
 		// else{
 		// 	switchState = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 		// 	saveSwitch = switchState;
@@ -369,6 +373,7 @@ void led_control_task(void *pvParameter){
 	// uint8_t rec_load_op;
 
 	while(1){
+
 
 		// check if mode is Maintenance or stability
 		if (mode == MAINTAIN || mode == STABLE){
