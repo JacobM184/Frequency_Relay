@@ -345,22 +345,9 @@ void switch_poll_task(void *pvParameter){
 	// initialise vairiable for temporary storage of switch state
 	uint8_t switchState;
 	while(1){
-		if(mode == MAINTAIN || mode == STABLE){
-			switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
-		}
-
-		// else{
-		// 	switchState = saveSwitch & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
-		// 	saveSwitch = switchState;
-		// }
-
-		// if (prevSwitchState != switchState){
-		// 	xQueueSend(Q_switch_state, &switchState,0);
-		// }
-		// prevSwitchState = switchState;
-
-		// send switch state
+		switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 		xQueueSend(Q_switch_state, &switchState,0);
+
 	}
 }
 
@@ -369,20 +356,18 @@ void led_control_task(void *pvParameter){
 	// initialise variable to receive switch state
 	uint8_t rec_switchState;
 
-	// uint8_t loadLEDs;
-	// uint8_t rec_load_op;
 
 	while(1){
 
 
 		// check if mode is Maintenance or stability
 		if (mode == MAINTAIN || mode == STABLE){
-
 			// receive switch state from switch_poll_task()
 			xQueueReceive(Q_switch_state,&rec_switchState,portMAX_DELAY);
-
+//			rec_switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 			// update Red LEDS
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,rec_switchState);
+//			printf("LED R led ctrl %d\n",rec_switchState);
 
 			// turn off Green LEDs
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,0x0);
