@@ -11,7 +11,8 @@
 #include "sys/alt_irq.h"
 #include "io.h"
 #include "altera_avalon_pio_regs.h"
-
+#include "altera_up_avalon_ps2.h"
+#include "altera_up_ps2_keyboard.h"
 
 // Task State definitions
 #define STABLE					2
@@ -26,10 +27,14 @@ FILE *lcd;
 #define ROC_THRESHOLD 50
 #define FREQ_THRESHOLD 49
 
+double freq_Threshold = 49;
+double RoC_Threshold = 50;
+
 QueueHandle_t Q_freq_calc;
 QueueHandle_t Q_freq_data;
 QueueHandle_t Q_switch_state;
 QueueHandle_t Q_stability;
+QueueHandle_t Q_key;
 
 TimerHandle_t timer500;
 
@@ -49,6 +54,7 @@ int initCreateTasks(void);
 #define FREQ_CALC_PRIORITY			4
 #define STABILITY_TASK_PRIORITY 	5
 #define LOAD_MANAGE_PRIORITY		6
+#define KEY_PRIORITY				7
 
 
 // Global Variables
@@ -105,6 +111,36 @@ void button_isr(){
 	IOWR_ALTERA_AVALON_PIO_EDGE_CAP(PUSH_BUTTON_BASE, 0x7);
 }
 
+void ps2_isr (void* context, alt_u32 id)
+{
+  char ascii;
+  int status = 0;
+  unsigned char key = 0;
+  KB_CODE_TYPE decode_mode;
+  status = decode_scancode (context, &decode_mode , &key , &ascii) ;
+  if ( status == 0 ) //success
+  {
+    // print out the result
+    switch ( decode_mode )
+    {
+      case KB_ASCII_MAKE_CODE :
+//        printf ( "ASCII   : %x\n", key );
+        break ;
+
+      case KB_BINARY_MAKE_CODE :
+//        printf ( "MAKE CODE : %x\n", key );
+        break ;
+
+      default :
+//        printf ( "DEFAULT   : %x\n", key );
+        break ;
+    }
+    IOWR(SEVEN_SEG_BASE,0 ,key);
+
+    xQueueSendFromISR(Q_key,&key,0);
+  }
+}
+
 void freq_calc_task(void *pvParameter){
 
 	// intialise arrays to hold frequency and RoC of frequency data
@@ -153,7 +189,7 @@ void stability_task(void *pvParameter){
 		xQueueReceive(Q_freq_data, freqData, portMAX_DELAY);
 
 		// check if data violates set thresholds
-		if((freqData[0] < FREQ_THRESHOLD) || (freqData[1] > ROC_THRESHOLD)){
+		if((freqData[0] < freq_Threshold) || (freqData[1] > RoC_Threshold)){
 			stability = 0;
 
 		}else{
@@ -183,6 +219,7 @@ void load_manage_task(void *pvParameter){
 		// blocking SemaphoreTake function to ensure that the task is blocked until timer times out
 		xSemaphoreTake(stablephore,portMAX_DELAY);
 
+
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
 
@@ -191,7 +228,7 @@ void load_manage_task(void *pvParameter){
 		ledValueR = saveSwitch;
 		// check value of stbaility state
 		if (rec_stability == 0){
-			printf("Unstable\n");
+//			printf("Unstable\n");
 
 			// if the mode is stable, but state is unstable, change mode
 			if(mode == STABLE){
@@ -204,7 +241,7 @@ void load_manage_task(void *pvParameter){
 
 		} else {
 
-			printf("Getting stable\n");
+//			printf("Getting stable\n");
 			 //check if all loads are connected when stable state
 
 
@@ -213,7 +250,7 @@ void load_manage_task(void *pvParameter){
 				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				ledValueR = saveSwitch;
 				mode=STABLE;
-				printf("Mode is STABLE\n");
+//				printf("Mode is STABLE\n");
 			}else{
 
 				// reconnect loads if all loads not reconnected
@@ -401,6 +438,66 @@ void lcd_task(void *pvParameter){
         vTaskDelay(100);
 	}
 }
+
+void key_task(void *pvParameter){
+	unsigned char rec_key;
+	unsigned char freq_threshold[3];
+	unsigned char RoC_threshold[3];
+	unsigned char select;
+	uint8_t temp = 0;
+	uint8_t count = 0;
+
+	while(1){
+		if(mode == MAINTAIN){
+			while (rec_key != 0x5a){
+
+				xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
+				if ((rec_key == 0x2b) && (temp == 0)){
+					select = 'f';
+					temp = 1;
+				} else if ((rec_key == 0x2d) && (temp == 0)){
+					select = 'r';
+					temp = 1;
+				} else if (temp == 0) {
+					select = 'x';
+				}
+
+				printf("Key: %x\n", rec_key);
+				printf("Select: %c\n",select);
+
+				if (select == 'f'){
+					freq_threshold[count] = rec_key;
+					count++;
+				} else if (select == 'r'){
+					RoC_threshold[count] = rec_key;
+					count++;
+				} else {
+					printf("dumbass ( *o*)\n");
+					break;
+				}
+
+
+			}
+
+			printf("Input %s\n", freq_threshold);
+			if (select == 'f'){
+				freq_Threshold = atoi(freq_threshold);
+				printf("Freq : %d\n",freq_Threshold);
+			} else if (select == 'r'){
+				RoC_Threshold = atoi(RoC_threshold);
+				printf("RoC : %d\n",RoC_Threshold);
+			}
+
+			temp = 0;
+			count = 0;
+
+
+
+
+		}
+
+	}
+}
 void vTimerCallback(xTimerHandle t_timer){
 
 	// give binary semaphore when timer times out
@@ -414,6 +511,17 @@ int main(int argc, char* argv[], char* envp[])
 	// intialise tasks, queues and semaphores
 	initOSDataStructs();
 	initCreateTasks();
+
+	//ps2 device setup
+	alt_up_ps2_dev * ps2_device = alt_up_ps2_open_dev(PS2_NAME);
+
+	if(ps2_device == NULL){
+		printf("can't find PS/2 device\n");
+		return 1;
+	}
+
+	alt_up_ps2_enable_read_interrupt(ps2_device);
+	alt_irq_register(PS2_IRQ, ps2_device, ps2_isr);
 
 	// clear edge capture register for push buttons
 	IOWR_ALTERA_AVALON_PIO_EDGE_CAP(PUSH_BUTTON_BASE, 0x7);
@@ -447,6 +555,7 @@ int initOSDataStructs(void)
 	Q_freq_data = xQueueCreate(10, (sizeof(double)*2));
 	Q_switch_state = xQueueCreate(10, sizeof(uint8_t));
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
+	Q_key = xQueueCreate(10, sizeof(unsigned char));
 
 	stablephore = xSemaphoreCreateBinary();
 	LEDaphore = xSemaphoreCreateBinary();
@@ -463,6 +572,6 @@ int initCreateTasks(void)
 	xTaskCreate(switch_poll_task, "switch_poll_task", TASK_STACKSIZE, NULL, SWITCH_POLL_PRIORITY, NULL);
 	xTaskCreate(led_control_task, "led_control_task", TASK_STACKSIZE, NULL, LED_CTRL_PRIORITY, NULL);
 	xTaskCreate(lcd_task, "lcd_task", TASK_STACKSIZE, NULL, LCD_PRIORITY, NULL);
-
+	xTaskCreate(key_task, "key_task", TASK_STACKSIZE, NULL, KEY_PRIORITY, NULL);
 	return 0;
 }
