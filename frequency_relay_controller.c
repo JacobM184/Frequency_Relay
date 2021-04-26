@@ -249,6 +249,7 @@ void load_manage_task(void *pvParameter){
 			if (check_loads()){
 				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				ledValueR = saveSwitch;
+				xQueueReset(Q_switch_state); // potentially can fix 'flashing'
 				mode=STABLE;
 //				printf("Mode is STABLE\n");
 			}else{
