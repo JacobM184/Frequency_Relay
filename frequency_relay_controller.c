@@ -67,11 +67,14 @@ uint8_t ledValueR = 0x0;
 
 uint8_t mode = MAINTAIN;
 
+int check = 1;
+
 //function declarations
 void shed_loads();
 uint8_t get_i(uint8_t switch_state);
 void reconnect_loads();
 uint8_t check_loads();
+uint8_t keyToDig(unsigned char key);
 
 
 void freq_relay(){
@@ -111,11 +114,13 @@ void button_isr(){
 	IOWR_ALTERA_AVALON_PIO_EDGE_CAP(PUSH_BUTTON_BASE, 0x7);
 }
 
+
 void ps2_isr (void* context, alt_u32 id)
 {
   char ascii;
   int status = 0;
   unsigned char key = 0;
+
   KB_CODE_TYPE decode_mode;
   status = decode_scancode (context, &decode_mode , &key , &ascii) ;
   if ( status == 0 ) //success
@@ -136,8 +141,15 @@ void ps2_isr (void* context, alt_u32 id)
         break ;
     }
     IOWR(SEVEN_SEG_BASE,0 ,key);
+    if(check && mode == MAINTAIN){
+    	xQueueSendFromISR(Q_key,&key,0);
+    	check = 0;
+    } else {
+    	check =1;
+    }
 
-    xQueueSendFromISR(Q_key,&key,0);
+
+    usleep(1000);
   }
 }
 
@@ -249,7 +261,6 @@ void load_manage_task(void *pvParameter){
 			if (check_loads()){
 				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				ledValueR = saveSwitch;
-				xQueueReset(Q_switch_state); // potentially can fix 'flashing'
 				mode=STABLE;
 //				printf("Mode is STABLE\n");
 			}else{
@@ -442,63 +453,81 @@ void lcd_task(void *pvParameter){
 
 void key_task(void *pvParameter){
 	unsigned char rec_key;
-	unsigned char freq_threshold[3];
+	unsigned char freq_threshold[6];
 	unsigned char RoC_threshold[3];
 	unsigned char select;
 	uint8_t temp = 0;
 	uint8_t count = 0;
+	int i = 0;
+	xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
 
 	while(1){
 		if(mode == MAINTAIN){
-			while (rec_key != 0x5a){
+			xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
 
-				xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
-				if ((rec_key == 0x2b) && (temp == 0)){
-					select = 'f';
-					temp = 1;
-				} else if ((rec_key == 0x2d) && (temp == 0)){
-					select = 'r';
-					temp = 1;
-				} else if (temp == 0) {
-					select = 'x';
-				}
-
-				printf("Key: %x\n", rec_key);
-				printf("Select: %c\n",select);
-
-				if (select == 'f'){
-					freq_threshold[count] = rec_key;
-					count++;
-				} else if (select == 'r'){
-					RoC_threshold[count] = rec_key;
-					count++;
-				} else {
-					printf("dumbass ( *o*)\n");
-					break;
-				}
-
-
+			//freq
+			if (rec_key == 0x55){
+				freq_Threshold ++;
+			} else if (rec_key == 0x4e){
+				freq_Threshold --;
+			} else if (rec_key == 0x79){
+				RoC_Threshold +=.1;
+			} else if (rec_key == 0x7b){
+				RoC_Threshold -=.1;
 			}
 
-			printf("Input %s\n", freq_threshold);
-			if (select == 'f'){
-				freq_Threshold = atoi(freq_threshold);
-				printf("Freq : %d\n",freq_Threshold);
-			} else if (select == 'r'){
-				RoC_Threshold = atoi(RoC_threshold);
-				printf("RoC : %d\n",RoC_Threshold);
-			}
-
-			temp = 0;
-			count = 0;
-
-
-
-
+			printf("Freq: %f\n", freq_Threshold);
+			printf("RoC: %f\n", RoC_Threshold);
 		}
-
 	}
 }
+
+unsigned char keyToDig(unsigned char key){
+	unsigned char dig;
+
+	switch(key){
+		case 0x45:
+			dig = '0';
+			break;
+		case 0x16:
+			dig = '1';
+			break;
+		case 0x1e:
+			dig = '2';
+			break;
+		case 0x26:
+			dig = '3';
+			break;
+		case 0x25:
+			dig = '4';
+			break;
+		case 0x2e:
+			dig = '5';
+			break;
+		case 0x36:
+			dig = '6';
+			break;
+		case 0x3d:
+			dig = '7';
+			break;
+		case 0x3e:
+			dig = '8';
+			break;
+		case 0x46:
+			dig = '9';
+			break;
+		case 0x49:
+			dig = '.';
+			break;
+		default:
+			dig = 0;
+			break;
+	}
+
+	return dig;
+
+}
+
 void vTimerCallback(xTimerHandle t_timer){
 
 	// give binary semaphore when timer times out
