@@ -35,6 +35,7 @@ QueueHandle_t Q_freq_data;
 QueueHandle_t Q_switch_state;
 QueueHandle_t Q_stability;
 QueueHandle_t Q_key;
+QueueHandle_t Q_timestamp;
 
 TimerHandle_t timer500;
 
@@ -194,7 +195,7 @@ void stability_task(void *pvParameter){
 
 	//  initialise variable to store freq and RoC
 	double freqData[2];
-
+	int start_time;
 	while(1){
 
 		// recieve data from freq_calc_task()
@@ -202,9 +203,13 @@ void stability_task(void *pvParameter){
 
 		// check if data violates set thresholds
 		if((freqData[0] < freq_Threshold) || (freqData[1] > RoC_Threshold)){
+			start_time = xTaskGetTickCount();
 			stability = 0;
+//			printf("Unstable\n");
+			xQueueSend(Q_timestamp, &start_time,0);
 
 		}else{
+//			printf("Stable\n");
 			stability = 1;
 		}
 
@@ -225,15 +230,19 @@ void load_manage_task(void *pvParameter){
 
 	// initialise variable to store recieved data
 	uint8_t rec_stability;
+	int end_time;
+	int rec_start_time;
+	int dtime;
 	// uint8_t load_op;
 	while(1){
 
 		// blocking SemaphoreTake function to ensure that the task is blocked until timer times out
 		xSemaphoreTake(stablephore,portMAX_DELAY);
 
-
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
+
+		xQueueReceive(Q_timestamp,&rec_start_time,10);
 
 		// IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
 		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
@@ -249,8 +258,16 @@ void load_manage_task(void *pvParameter){
 			}
 			// shed loads when unstable
 			shed_loads();
+
 			xSemaphoreGive(LEDaphore);
 
+			end_time = xTaskGetTickCount();
+			dtime = (end_time - rec_start_time);
+
+			xQueueReset(Q_timestamp);
+			printf("Time Taken: %d\n", dtime);
+			printf("End: %d\n", (end_time));
+			printf("Start: %d\n\n", (rec_start_time));
 		} else {
 
 //			printf("Getting stable\n");
@@ -261,6 +278,7 @@ void load_manage_task(void *pvParameter){
 			if (check_loads()){
 				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				ledValueR = saveSwitch;
+				xQueueReset(Q_switch_state);
 				mode=STABLE;
 //				printf("Mode is STABLE\n");
 			}else{
@@ -405,7 +423,6 @@ void led_control_task(void *pvParameter){
 	// initialise variable to receive switch state
 	uint8_t rec_switchState;
 
-
 	while(1){
 
 
@@ -423,7 +440,9 @@ void led_control_task(void *pvParameter){
 		}else{
 			xSemaphoreTake(LEDaphore, 100);
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
+			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
+
 			//vTaskDelay(50);
 		}
 	}
@@ -480,52 +499,6 @@ void key_task(void *pvParameter){
 			printf("RoC: %f\n", RoC_Threshold);
 		}
 	}
-}
-
-unsigned char keyToDig(unsigned char key){
-	unsigned char dig;
-
-	switch(key){
-		case 0x45:
-			dig = '0';
-			break;
-		case 0x16:
-			dig = '1';
-			break;
-		case 0x1e:
-			dig = '2';
-			break;
-		case 0x26:
-			dig = '3';
-			break;
-		case 0x25:
-			dig = '4';
-			break;
-		case 0x2e:
-			dig = '5';
-			break;
-		case 0x36:
-			dig = '6';
-			break;
-		case 0x3d:
-			dig = '7';
-			break;
-		case 0x3e:
-			dig = '8';
-			break;
-		case 0x46:
-			dig = '9';
-			break;
-		case 0x49:
-			dig = '.';
-			break;
-		default:
-			dig = 0;
-			break;
-	}
-
-	return dig;
-
 }
 
 void vTimerCallback(xTimerHandle t_timer){
@@ -586,6 +559,7 @@ int initOSDataStructs(void)
 	Q_switch_state = xQueueCreate(10, sizeof(uint8_t));
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 	Q_key = xQueueCreate(10, sizeof(unsigned char));
+	Q_timestamp = xQueueCreate(10, sizeof(int));
 
 	stablephore = xSemaphoreCreateBinary();
 	LEDaphore = xSemaphoreCreateBinary();
