@@ -42,6 +42,7 @@ TimerHandle_t timer500;
 // Definition of Semaphore
 SemaphoreHandle_t stablephore;
 SemaphoreHandle_t LEDaphore;
+SemaphoreHandle_t chronophore;
 
 
 // Local Function Prototypes
@@ -203,10 +204,16 @@ void stability_task(void *pvParameter){
 
 		// check if data violates set thresholds
 		if((freqData[0] < freq_Threshold) || (freqData[1] > RoC_Threshold)){
+
+
 			start_time = xTaskGetTickCount();
 			stability = 0;
 //			printf("Unstable\n");
-			xQueueSend(Q_timestamp, &start_time,0);
+
+			if(xSemaphoreTake(chronophore,10) == pdTRUE){ // no real reason for 10 tick delay - just felt like it
+				xQueueSend(Q_timestamp, &start_time,0);
+			}
+			
 
 		}else{
 //			printf("Stable\n");
@@ -241,13 +248,14 @@ void load_manage_task(void *pvParameter){
 
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
+		// receive starting timestamp from stability task
+		xQueueReceive(Q_timestamp,&rec_start_time,0);
 
-		xQueueReceive(Q_timestamp,&rec_start_time,10);
-
-		// IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,(IORD_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE) & saveSwitch));
+		// update saveSwitch for when swithces turned off
 		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
+		// update red LED value
 		ledValueR = saveSwitch;
-		// check value of stbaility state
+		// check value of stability state
 		if (rec_stability == 0){
 //			printf("Unstable\n");
 
@@ -258,13 +266,15 @@ void load_manage_task(void *pvParameter){
 			}
 			// shed loads when unstable
 			shed_loads();
-
+			// give semaphore to led control
 			xSemaphoreGive(LEDaphore);
 
+			// get time after load shed
 			end_time = xTaskGetTickCount();
+			// calculate response time
 			dtime = (end_time - rec_start_time);
 
-			xQueueReset(Q_timestamp);
+			xQueueReset(Q_timestamp); // unsure if this is necessary
 			printf("Time Taken: %d\n", dtime);
 			printf("End: %d\n", (end_time));
 			printf("Start: %d\n\n", (rec_start_time));
@@ -284,8 +294,8 @@ void load_manage_task(void *pvParameter){
 			}else{
 
 				// reconnect loads if all loads not reconnected
-				//ledValueR = ledValueR & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				reconnect_loads();
+				// give semaphore to led control
 				xSemaphoreGive(LEDaphore);
 
 			}
@@ -302,13 +312,8 @@ void shed_loads(){
 	// for loop to check if any of the leds are 'on', individually
 	for (i = 0x1; i<=0x1F; i*=2){
 
-		// update saveSwitch
-//		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
-
 		// check if load is 'on'
 		if ((saveSwitch & i) != 0){
-
-
 
 			// update Red LED value
 			ledValueR = ledValueR & saveSwitch;
@@ -317,12 +322,11 @@ void shed_loads(){
 
 			// update Green LED value
 			ledValueG = (ledValueG | i) ;
-			// update Red and Green LEDs
-//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
 
+			// ensure that managed loads switched off when corresponding switch is off
+			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE); 
+			
 			//break from loop
-			// xSemaphoreGive(LEDaphore);
 			break;
 		}
 	}
@@ -337,9 +341,6 @@ void reconnect_loads(){
 	if (saveSwitch == 0){
 		saveSwitch = ledValueG;
 	}
-//	else{
-//		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
-//	}
 
 	// for loop to cycle through Green LEDs that are on, starting from highest priority
 	for (i = get_i(saveSwitch); i > 0; i/=2){
@@ -352,19 +353,13 @@ void reconnect_loads(){
 			// update Green LED value
 			ledValueG = (ledValueG & (~i)) & 0x1F;
 
-			// update Red LED value
-
+			// update Red LED value if corresponding switch on
 			if(j){
 				ledValueR = ((ledValueR | j) & 0x1F) ;
 				saveSwitch = ledValueR;
 			}
 
-			// update Red and Green LEDs
-//			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-//			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,ledValueG);
-
 			// break from loop
-			// xSemaphoreGive(LEDaphore);
 			break;
 		}
 	}
@@ -394,25 +389,30 @@ uint8_t get_i(uint8_t switch_state){
 
 uint8_t check_loads(){
 
-	//saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 	// check if the Red LEDs are == to the saved switch state
 	if(ledValueG == 0){
-//		IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE));
+
+		//update saveSwitch
 		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+
 		return 1;
 	} else{
-//		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+		
 		return 0;
 	}
 }
 
 void switch_poll_task(void *pvParameter){
-	// uint8_t prevSwitchState = 0x0;
 
 	// initialise vairiable for temporary storage of switch state
 	uint8_t switchState;
+
 	while(1){
+		
+		// read switches
 		switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
+
+		// send switch state via queue
 		xQueueSend(Q_switch_state, &switchState,0);
 
 	}
@@ -440,7 +440,7 @@ void led_control_task(void *pvParameter){
 		}else{
 			xSemaphoreTake(LEDaphore, 100);
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			// ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
 
 			//vTaskDelay(50);
@@ -478,23 +478,37 @@ void key_task(void *pvParameter){
 	uint8_t temp = 0;
 	uint8_t count = 0;
 	int i = 0;
+
+	// receive initial key press value so that there is no issue on startup
 	xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
 
+	// potentially consider a xQueueReset() instead?
+
 	while(1){
+
+		// check if the mode is maintainence
 		if(mode == MAINTAIN){
+
+			// block until key received
 			xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
 
-			//freq
+			// increment or decrement frequency values by 1 
+			// for correct key presses
 			if (rec_key == 0x55){
 				freq_Threshold ++;
 			} else if (rec_key == 0x4e){
 				freq_Threshold --;
+
+			// increment or decrement RoC values by 0.1
+			// for correct key presses
 			} else if (rec_key == 0x79){
 				RoC_Threshold +=.1;
 			} else if (rec_key == 0x7b){
 				RoC_Threshold -=.1;
 			}
 
+
+			// output new frequenct and RoC thresholds
 			printf("Freq: %f\n", freq_Threshold);
 			printf("RoC: %f\n", RoC_Threshold);
 		}
@@ -503,7 +517,10 @@ void key_task(void *pvParameter){
 
 void vTimerCallback(xTimerHandle t_timer){
 
-	// give binary semaphore when timer times out
+	// give semaphore to start response timer
+	xSemaphoreGive(chronophore);
+
+	// give semaphore to unblock load management 
 	xSemaphoreGive(stablephore);
 }
 
@@ -563,6 +580,7 @@ int initOSDataStructs(void)
 
 	stablephore = xSemaphoreCreateBinary();
 	LEDaphore = xSemaphoreCreateBinary();
+	chronophore = xSemaphoreCreateBinary();
 	return 0;
 }
 
