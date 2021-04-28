@@ -213,11 +213,12 @@ void stability_task(void *pvParameter){
 			if(xSemaphoreTake(chronophore,10) == pdTRUE){ // no real reason for 10 tick delay - just felt like it
 				xQueueSend(Q_timestamp, &start_time,0);
 			}
-			
+
 
 		}else{
 //			printf("Stable\n");
 			stability = 1;
+			xQueueReset(Q_timestamp);
 		}
 
 //		printf("Stab: %d\n",stability);
@@ -249,7 +250,8 @@ void load_manage_task(void *pvParameter){
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
 		// receive starting timestamp from stability task
-		xQueueReceive(Q_timestamp,&rec_start_time,0);
+//		xQueueReceive(Q_timestamp,&rec_start_time,0);
+//		xQueueReset(Q_timestamp);
 
 		// update saveSwitch for when swithces turned off
 		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
@@ -272,12 +274,18 @@ void load_manage_task(void *pvParameter){
 			// get time after load shed
 			end_time = xTaskGetTickCount();
 			// calculate response time
-			dtime = (end_time - rec_start_time);
 
-			xQueueReset(Q_timestamp); // unsure if this is necessary
-			printf("Time Taken: %d\n", dtime);
-			printf("End: %d\n", (end_time));
-			printf("Start: %d\n\n", (rec_start_time));
+			if(xQueueReceive(Q_timestamp,&rec_start_time,0) == pdTRUE){
+				dtime = (end_time - rec_start_time);
+
+				xQueueReset(Q_timestamp); // unsure if this is necessary
+				printf("Time Taken: %d\n", dtime);
+				printf("End: %d\n", (end_time));
+				printf("Start: %d\n\n", (rec_start_time));
+			}
+
+
+			rec_start_time = 0;
 		} else {
 
 //			printf("Getting stable\n");
@@ -324,7 +332,7 @@ void shed_loads(){
 			ledValueG = (ledValueG | i) ;
 
 			// ensure that managed loads switched off when corresponding switch is off
-			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE); 
+//			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			
 			//break from loop
 			break;
@@ -440,7 +448,7 @@ void led_control_task(void *pvParameter){
 		}else{
 			xSemaphoreTake(LEDaphore, 100);
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			// ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			 ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
 
 			//vTaskDelay(50);
