@@ -24,15 +24,16 @@
 
 int time;
 char time_C[10];
-
+int k = 4;
 
 //lcd
 FILE *lcd;
 // Definition of Task Stacks
 #define   TASK_STACKSIZE       2048
 
+
 double freq_Threshold = 49;
-double RoC_Threshold = 6;
+double RoC_Threshold = 10;
 
 QueueHandle_t Q_freq_calc;
 QueueHandle_t Q_freq_data;
@@ -40,13 +41,14 @@ QueueHandle_t Q_switch_state;
 QueueHandle_t Q_stability;
 QueueHandle_t Q_key;
 QueueHandle_t Q_timestamp;
+QueueHandle_t Q_d_time;
 
 TimerHandle_t timer500;
 
 // Definition of Semaphore
 SemaphoreHandle_t stablephore;
 SemaphoreHandle_t LEDaphore;
-//SemaphoreHandle_t chronophore;
+SemaphoreHandle_t chronophore;
 
 
 // Local Function Prototypes
@@ -72,8 +74,20 @@ uint8_t saveSwitch2 = 0x0;
 uint8_t prevStability = 1;
 uint8_t ledValueG = 0x0;
 uint8_t ledValueR = 0x0;
-
 uint8_t mode = MAINTAIN;
+
+int start_time;
+int printFlag = 0;
+int min = 100;
+int max = 0;
+int avg = 0;
+//get 200ms wokring
+
+int stableFlag = 0;
+int loadFlag;
+int shedCount=0;
+int prevMode = MAINTAIN;
+int resp_t[5];
 
 //Copies
 uint8_t rec_stab_copy;
@@ -112,9 +126,7 @@ uint8_t keyToDig(unsigned char key);
 void freq_relay(){
 	#define SAMPLING_FREQ 16000.0
 	double temp = SAMPLING_FREQ/(double)IORD(FREQUENCY_ANALYSER_BASE, 0);
-
 	xQueueSendFromISR(Q_freq_calc, &temp, 0);
-
 	return;
 }
 
@@ -122,9 +134,10 @@ void button_isr(){
 
 	// condition for changing to load management
 	if (mode == MAINTAIN){
-		mode = LOADMANAGE;
+		prevMode = MAINTAIN;
+		mode = STABLE;
 		printf("MODE: %d\n",mode);
-
+		loadFlag = 1;
 		// start timer to being load management
 		xTimerStartFromISR(timer500,0);
 
@@ -136,8 +149,12 @@ void button_isr(){
 		ledValueR = saveSwitch;
 		ledValueG = 0x0;
 
+
 	} else { // condition for changing to maintenance mode
+		prevMode = mode;
 		mode = MAINTAIN;
+
+		loadFlag = 0;
 		printf("MODE: %d\n",mode);
 
 		// stop the timer
@@ -183,19 +200,22 @@ void ps2_isr (void* context, alt_u32 id)
     }
 
 
-    usleep(1000);
   }
 }
 
+void freq_calc_task(void *pvParameter){
+
+
+
+}
 
 void stability_task(void *pvParameter){
 
 	//  initialise variable to store freq and RoC
 	double freqData[2];
-	int start_time;
-	int end_time;
-	int dtime;
-	uint8_t prevMode = mode;
+
+
+
 
 	while(1){
 
@@ -205,9 +225,26 @@ void stability_task(void *pvParameter){
 		// check if data violates set thresholds
 		if((freqData[0] < freq_Threshold) || (freqData[1] > RoC_Threshold)){
 
+
+			start_time = xTaskGetTickCount();
+			stability = 0;
+//			printf("Unstable\n");
+
+
+			if(mode == STABLE){
+				shed_loads();
+				mode = LOADMANAGE;
+				xTimerReset(timer500,0);
+				xSemaphoreGive(LEDaphore);
+				printFlag = 1;
+				xQueueSend(Q_timestamp, &start_time, 0);
+
+			}
+
 		}else{
 //			printf("Stable\n");
 			stability = 1;
+			xQueueReset(Q_timestamp);
 		}
 
 //		printf("Stab: %d\n",stability);
@@ -215,9 +252,11 @@ void stability_task(void *pvParameter){
 		// reset timer on stability stae change
 		if((stability != prevStability) && (mode != MAINTAIN)){
 			xTimerReset(timer500,0);
-			prevStability = stability;
+
 		}
 
+
+		prevStability = stability;
 		// send stability state
 		xQueueSend(Q_stability, &stability,0);
 	}
@@ -231,13 +270,14 @@ void load_manage_task(void *pvParameter){
 	// uint8_t load_op;
 	while(1){
 
+
+
+
 		// blocking SemaphoreTake function to ensure that the task is blocked until timer times out
 		xSemaphoreTake(stablephore,portMAX_DELAY);
 
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
-		// receive starting timestamp from stability task
-//		xQueueReceive(Q_timestamp,&rec_start_time,0);
 //		xQueueReset(Q_timestamp);
 
 		// update saveSwitch for when swithces turned off
@@ -253,11 +293,16 @@ void load_manage_task(void *pvParameter){
 			if(mode == STABLE){
 				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 				mode = LOADMANAGE;
+				stableFlag = 0;
 			}
 			// shed loads when unstable
 			shed_loads();
 			// give semaphore to led control
 			xSemaphoreGive(LEDaphore);
+
+			// get time after load shed
+//			end_time = xTaskGetTickCount();
+			// calculate response time
 
 		} else {
 
@@ -271,6 +316,7 @@ void load_manage_task(void *pvParameter){
 				ledValueR = saveSwitch;
 				xQueueReset(Q_switch_state);
 				mode=STABLE;
+				stableFlag = 1;
 //				printf("Mode is STABLE\n");
 			}else{
 
@@ -281,6 +327,9 @@ void load_manage_task(void *pvParameter){
 
 			}
 		}
+
+
+		prevMode = mode;
 
 
 	}
@@ -403,6 +452,10 @@ void led_control_task(void *pvParameter){
 
 	// initialise variable to receive switch state
 	uint8_t rec_switchState;
+	int end_time;
+	int rec_start_time;
+	int d_time;
+	int l = 0;
 
 	while(1){
 
@@ -424,7 +477,28 @@ void led_control_task(void *pvParameter){
 			 ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
 
-			//vTaskDelay(50);
+			if(printFlag){
+				end_time = xTaskGetTickCount();
+				xQueueReceive(Q_timestamp, &rec_start_time,0);
+				d_time = end_time - rec_start_time;
+//				printf("D Time %d\n",d_time);
+				printFlag = 0;
+				resp_t[k] = d_time;
+				k = ++k%5;
+
+				if(d_time < min){
+					min = d_time;
+				}
+
+				if(d_time > max){
+					max = d_time;
+				}
+			}
+			for(l = 0; l < 5; l++){
+				printf("%d ", resp_t[l]);
+			}
+			printf("\n");
+
 		}
 	}
 
@@ -496,7 +570,7 @@ void key_task(void *pvParameter){
 	}
 }
 
-/****** Superior Code ******/
+/****** VGA display ******/
 
 void PRVGADraw_Task(void *pvParameters ){
 
@@ -546,7 +620,9 @@ void PRVGADraw_Task(void *pvParameters ){
 
 	char freq_S[10], roc_S[10];
 	double freq[100], dfreq[100], freqData[2];
+
 	int i = 99, j = 0;
+
 	Line line_freq, line_roc;
 
 	while(1){
@@ -573,12 +649,11 @@ void PRVGADraw_Task(void *pvParameters ){
 //			printf("Freq: %f\n",freq[i]);
 
 		// send data
-		if (mode != MAINTAIN){
-			xQueueSend(Q_freq_data,freqData,0);
-		}
+		xQueueSend(Q_freq_data,freqData,0);
+
+		i =	++i%100 ; //point to the next data (oldest) to be overwritten
 
 
-		i =	++i%100; //point to the next data (oldest) to be overwritten
 
 		//clear old graph to draw new graph
 		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, 0, 0);
@@ -593,11 +668,7 @@ void PRVGADraw_Task(void *pvParameters ){
 		alt_up_char_buffer_string(char_buf, freq_S, 55, 48);
 		alt_up_char_buffer_string(char_buf, roc_S, 55, 56);
 
-
-
 		if (mode != MAINTAIN){
-
-
 			if (rec_stab_copy == 0){
 				alt_up_char_buffer_string(char_buf, "Unstable      ", 19, 56);
 			} else if (rec_stab_copy == 1) {
@@ -625,11 +696,9 @@ void PRVGADraw_Task(void *pvParameters ){
 
 					//Draw
 					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_freq.x1, line_freq.y1, line_freq.x2, line_freq.y2, 0x3ff << 0, 0);
-					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_roc.x1, line_roc.y1, line_roc.x2, line_roc.y2, ((0x3ff << 15) + (0x3ff)), 0);
+					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_roc.x1, line_roc.y1, line_roc.x2, line_roc.y2, 0x3ff << 0, 0);
 				}
 			}
-
-
 
 		} else {
 				alt_up_char_buffer_string(char_buf, "In Maintenance", 19, 56);
@@ -647,7 +716,7 @@ void PRVGADraw_Task(void *pvParameters ){
 void vTimerCallback(xTimerHandle t_timer){
 
 	// give semaphore to start response timer
-//	xSemaphoreGive(chronophore);
+	xSemaphoreGive(chronophore);
 
 	// give semaphore to unblock load management
 	xSemaphoreGive(stablephore);
@@ -706,10 +775,11 @@ int initOSDataStructs(void)
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 	Q_key = xQueueCreate(10, sizeof(unsigned char));
 	Q_timestamp = xQueueCreate(10, sizeof(int));
+//	Q_d_time = xQueueCreate(1, sizeof(int));
 
 	stablephore = xSemaphoreCreateBinary();
 	LEDaphore = xSemaphoreCreateBinary();
-//	chronophore = xSemaphoreCreateBinary();
+	chronophore = xSemaphoreCreateBinary();
 	return 0;
 }
 
