@@ -14,10 +14,17 @@
 #include "altera_up_avalon_ps2.h"
 #include "altera_up_ps2_keyboard.h"
 
+#include "altera_up_avalon_video_character_buffer_with_dma.h"
+#include "altera_up_avalon_video_pixel_buffer_dma.h"
+
 // Task State definitions
 #define STABLE					2
 #define MAINTAIN				1
 #define LOADMANAGE				0
+
+int time;
+char time_C[10];
+
 
 //lcd
 FILE *lcd;
@@ -53,11 +60,13 @@ int initCreateTasks(void);
 #define SWITCH_POLL_PRIORITY		1
 #define LCD_PRIORITY				2
 #define LED_CTRL_PRIORITY			3
-#define FREQ_CALC_PRIORITY			4
+//#define FREQ_CALC_PRIORITY			4
 #define STABILITY_TASK_PRIORITY 	5
 #define LOAD_MANAGE_PRIORITY		6
 #define KEY_PRIORITY				7
 
+#define PRVGADraw_Task_P      4
+TaskHandle_t PRVGADraw;
 
 // Global Variables
 uint8_t stability = 1;
@@ -69,7 +78,31 @@ uint8_t ledValueR = 0x0;
 
 uint8_t mode = MAINTAIN;
 
+//Copies
+uint8_t rec_stab_copy;
+
 int check = 1;
+
+//For frequency plot
+#define FREQPLT_ORI_X 101		//x axis pixel position at the plot origin
+#define FREQPLT_GRID_SIZE_X 5	//pixel separation in the x axis between two data points
+#define FREQPLT_ORI_Y 199.0		//y axis pixel position at the plot origin
+#define FREQPLT_FREQ_RES 20.0	//number of pixels per Hz (y axis scale)
+
+#define ROCPLT_ORI_X 101
+#define ROCPLT_GRID_SIZE_X 5
+#define ROCPLT_ORI_Y 259.0
+#define ROCPLT_ROC_RES 0.5		//number of pixels per Hz/s (y axis scale)
+
+#define MIN_FREQ 45.0 //minimum frequency to draw
+
+typedef struct{
+	unsigned int x1;
+	unsigned int y1;
+	unsigned int x2;
+	unsigned int y2;
+}Line;
+
 
 //function declarations
 void shed_loads();
@@ -157,38 +190,7 @@ void ps2_isr (void* context, alt_u32 id)
 
 void freq_calc_task(void *pvParameter){
 
-	// intialise arrays to hold frequency and RoC of frequency data
-	double freq[100], dfreq[100], freqData[2];
 
-	// initialise i
-	int i = 99;
-
-	while(1){
-
-		// receive frequwncy data from freq_relay()
-		xQueueReceive(Q_freq_calc, freq+i, portMAX_DELAY);
-
-		// calculate RoC
-		if(i==0){
-			dfreq[0] = (freq[0]-freq[99]) * 2.0 * freq[0] * freq[99] / (freq[0]+freq[99]);
-		}
-		else{
-			dfreq[i] = (freq[i]-freq[i-1]) * 2.0 * freq[i]* freq[i-1] / (freq[i]+freq[i-1]);
-		}
-
-		// store frequency
-		freqData[0] = freq[i];
-		// store RoC of frequency
-		freqData[1] = dfreq[i];
-
-//			printf("Freq: %f\n",freq[i]);
-
-		// send data
-		xQueueSend(Q_freq_data,freqData,0);
-
-		i =	++i%100; //point to the next data (oldest) to be overwritten
-
-	}
 
 }
 
@@ -197,6 +199,8 @@ void stability_task(void *pvParameter){
 	//  initialise variable to store freq and RoC
 	double freqData[2];
 	int start_time;
+
+
 	while(1){
 
 		// recieve data from freq_calc_task()
@@ -210,7 +214,7 @@ void stability_task(void *pvParameter){
 			stability = 0;
 //			printf("Unstable\n");
 
-			if(xSemaphoreTake(chronophore,10) == pdTRUE){ // no real reason for 10 tick delay - just felt like it
+			if(xSemaphoreTake(chronophore,10) == pdTRUE ){ // no real reason for 10 tick delay - just felt like it
 				xQueueSend(Q_timestamp, &start_time,0);
 			}
 
@@ -258,6 +262,7 @@ void load_manage_task(void *pvParameter){
 		// update red LED value
 		ledValueR = saveSwitch;
 		// check value of stability state
+		rec_stab_copy = rec_stability;
 		if (rec_stability == 0){
 //			printf("Unstable\n");
 
@@ -333,7 +338,7 @@ void shed_loads(){
 
 			// ensure that managed loads switched off when corresponding switch is off
 //			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
-			
+
 			//break from loop
 			break;
 		}
@@ -402,10 +407,10 @@ uint8_t check_loads(){
 
 		//update saveSwitch
 		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
-
+		rec_stab_copy = 2;
 		return 1;
 	} else{
-		
+
 		return 0;
 	}
 }
@@ -416,7 +421,7 @@ void switch_poll_task(void *pvParameter){
 	uint8_t switchState;
 
 	while(1){
-		
+
 		// read switches
 		switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 
@@ -500,7 +505,7 @@ void key_task(void *pvParameter){
 			// block until key received
 			xQueueReceive(Q_key, &rec_key, portMAX_DELAY);
 
-			// increment or decrement frequency values by 1 
+			// increment or decrement frequency values by 1
 			// for correct key presses
 			if (rec_key == 0x55){
 				freq_Threshold ++;
@@ -523,12 +528,148 @@ void key_task(void *pvParameter){
 	}
 }
 
+/****** VGA display ******/
+
+void PRVGADraw_Task(void *pvParameters ){
+
+
+	//initialize VGA controllers
+	alt_up_pixel_buffer_dma_dev *pixel_buf;
+	pixel_buf = alt_up_pixel_buffer_dma_open_dev(VIDEO_PIXEL_BUFFER_DMA_NAME);
+	if(pixel_buf == NULL){
+		printf("can't find pixel buffer device\n");
+	}
+	alt_up_pixel_buffer_dma_clear_screen(pixel_buf, 0);
+
+	alt_up_char_buffer_dev *char_buf;
+	char_buf = alt_up_char_buffer_open_dev("/dev/video_character_buffer_with_dma");
+	if(char_buf == NULL){
+		printf("can't find char buffer device\n");
+	}
+	alt_up_char_buffer_clear(char_buf);
+
+
+
+	//Set up plot axes
+	alt_up_pixel_buffer_dma_draw_hline(pixel_buf, 100, 590, 200, ((0x3ff << 20) + (0x3ff << 10) + (0x3ff)), 0);
+	alt_up_pixel_buffer_dma_draw_hline(pixel_buf, 100, 590, 300, ((0x3ff << 20) + (0x3ff << 10) + (0x3ff)), 0);
+	alt_up_pixel_buffer_dma_draw_vline(pixel_buf, 100, 50, 200, ((0x3ff << 20) + (0x3ff << 10) + (0x3ff)), 0);
+	alt_up_pixel_buffer_dma_draw_vline(pixel_buf, 100, 220, 300, ((0x3ff << 20) + (0x3ff << 10) + (0x3ff)), 0);
+
+	alt_up_char_buffer_string(char_buf, "Frequency(Hz)", 4, 4);
+	alt_up_char_buffer_string(char_buf, "52", 10, 7);
+	alt_up_char_buffer_string(char_buf, "50", 10, 12);
+	alt_up_char_buffer_string(char_buf, "48", 10, 17);
+	alt_up_char_buffer_string(char_buf, "46", 10, 22);
+
+	alt_up_char_buffer_string(char_buf, "df/dt(Hz/s)", 4, 26);
+	alt_up_char_buffer_string(char_buf, "60", 10, 28);
+	alt_up_char_buffer_string(char_buf, "30", 10, 30);
+	alt_up_char_buffer_string(char_buf, "0", 10, 32);
+	alt_up_char_buffer_string(char_buf, "-30", 9, 34);
+	alt_up_char_buffer_string(char_buf, "-60", 9, 36);
+
+
+	alt_up_char_buffer_string(char_buf, "Freq Thresh:", 40, 48);
+	alt_up_char_buffer_string(char_buf, "RoC Thresh: ", 40, 56);
+
+	alt_up_char_buffer_string(char_buf, "System Run Time:", 8, 48);
+	alt_up_char_buffer_string(char_buf, "Stability:", 8, 56);
+
+	char freq_S[10], roc_S[10];
+	double freq[100], dfreq[100], freqData[2];
+	int i = 99, j = 0;
+	Line line_freq, line_roc;
+
+	while(1){
+
+
+		// receive frequwncy data from freq_relay()
+		xQueueReceive(Q_freq_calc, freq+i, portMAX_DELAY);
+
+		// calculate RoC
+		if(i==0){
+			dfreq[0] = (freq[0]-freq[99]) * 2.0 * freq[0] * freq[99] / (freq[0]+freq[99]);
+
+		}
+		else{
+			dfreq[i] = (freq[i]-freq[i-1]) * 2.0 * freq[i]* freq[i-1] / (freq[i]+freq[i-1]);
+
+		}
+
+		// store frequency
+		freqData[0] = freq[i];
+		// store RoC of frequency
+		freqData[1] = dfreq[i];
+
+//			printf("Freq: %f\n",freq[i]);
+
+		// send data
+		xQueueSend(Q_freq_data,freqData,0);
+
+		i =	++i%100; //point to the next data (oldest) to be overwritten
+
+		//clear old graph to draw new graph
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, 0, 0);
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 201, 639, 299, 0, 0);
+
+		time = xTaskGetTickCount();
+		sprintf(time_C, "%d",time);
+		alt_up_char_buffer_string(char_buf, time_C, 25, 48);
+
+		sprintf(freq_S, "%f",freq_Threshold);
+		sprintf(roc_S, "%f",RoC_Threshold);
+		alt_up_char_buffer_string(char_buf, freq_S, 55, 48);
+		alt_up_char_buffer_string(char_buf, roc_S, 55, 56);
+
+		if (mode != MAINTAIN){
+			if (rec_stab_copy == 0){
+				alt_up_char_buffer_string(char_buf, "Unstable      ", 19, 56);
+			} else if (rec_stab_copy == 1) {
+				alt_up_char_buffer_string(char_buf, "Getting Stable", 19, 56);
+			} else {
+				alt_up_char_buffer_string(char_buf, "Stable        ", 19, 56);
+			}
+		} else {
+				alt_up_char_buffer_string(char_buf, "In Maintenance", 19, 56);
+		}
+
+
+
+		for(j=0;j<99;++j){ //i here points to the oldest data, j loops through all the data to be drawn on VGA
+			if (((int)(freq[(i+j)%100]) > MIN_FREQ) && ((int)(freq[(i+j+1)%100]) > MIN_FREQ)){
+				//Calculate coordinates of the two data points to draw a line in between
+				//Frequency plot
+				line_freq.x1 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * j;
+				line_freq.y1 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j)%100] - MIN_FREQ));
+
+				line_freq.x2 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * (j + 1);
+				line_freq.y2 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j+1)%100] - MIN_FREQ));
+
+				//Frequency RoC plot
+				line_roc.x1 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * j;
+				line_roc.y1 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j)%100]);
+
+				line_roc.x2 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * (j + 1);
+				line_roc.y2 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j+1)%100]);
+
+				//Draw
+				alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_freq.x1, line_freq.y1, line_freq.x2, line_freq.y2, 0x3ff << 0, 0);
+				alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_roc.x1, line_roc.y1, line_roc.x2, line_roc.y2, 0x3ff << 0, 0);
+			}
+		}
+		vTaskDelay(10);
+
+	}
+}
+
+
 void vTimerCallback(xTimerHandle t_timer){
 
 	// give semaphore to start response timer
 	xSemaphoreGive(chronophore);
 
-	// give semaphore to unblock load management 
+	// give semaphore to unblock load management
 	xSemaphoreGive(stablephore);
 }
 
@@ -595,7 +736,7 @@ int initOSDataStructs(void)
 // This function creates the tasks used in this example
 int initCreateTasks(void)
 {
-	xTaskCreate(freq_calc_task, "freq_calc_task", TASK_STACKSIZE, NULL, FREQ_CALC_PRIORITY, NULL);
+//	xTaskCreate(freq_calc_task, "freq_calc_task", TASK_STACKSIZE, NULL, FREQ_CALC_PRIORITY, NULL);
 	xTaskCreate(stability_task, "stability_task", TASK_STACKSIZE, NULL, STABILITY_TASK_PRIORITY, NULL);
 	xTaskCreate(load_manage_task, "load_manage_task", TASK_STACKSIZE, NULL, LOAD_MANAGE_PRIORITY, NULL);
 
@@ -603,5 +744,7 @@ int initCreateTasks(void)
 	xTaskCreate(led_control_task, "led_control_task", TASK_STACKSIZE, NULL, LED_CTRL_PRIORITY, NULL);
 	xTaskCreate(lcd_task, "lcd_task", TASK_STACKSIZE, NULL, LCD_PRIORITY, NULL);
 	xTaskCreate(key_task, "key_task", TASK_STACKSIZE, NULL, KEY_PRIORITY, NULL);
+
+	xTaskCreate( PRVGADraw_Task, "DrawTsk", configMINIMAL_STACK_SIZE, NULL, PRVGADraw_Task_P, &PRVGADraw );
 	return 0;
 }
