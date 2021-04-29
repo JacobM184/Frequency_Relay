@@ -208,12 +208,6 @@ void ps2_isr (void* context, alt_u32 id)
   }
 }
 
-void freq_calc_task(void *pvParameter){
-
-
-
-}
-
 void stability_task(void *pvParameter){
 
 	//  initialise variable to store freq and RoC
@@ -495,7 +489,7 @@ void led_control_task(void *pvParameter){
 		}else{
 			xSemaphoreTake(LEDaphore, 100);
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
-			 ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
 			end_time = xTaskGetTickCount();
 			if(printFlag){
