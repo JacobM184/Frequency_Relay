@@ -24,7 +24,7 @@
 
 int time;
 char time_C[10];
-int k = 4;
+
 
 //lcd
 FILE *lcd;
@@ -42,6 +42,7 @@ QueueHandle_t Q_stability;
 QueueHandle_t Q_key;
 QueueHandle_t Q_timestamp;
 QueueHandle_t Q_d_time;
+QueueHandle_t Q_timestamp2;
 
 TimerHandle_t timer500;
 
@@ -49,6 +50,7 @@ TimerHandle_t timer500;
 SemaphoreHandle_t stablephore;
 SemaphoreHandle_t LEDaphore;
 SemaphoreHandle_t chronophore;
+SemaphoreHandle_t endaphore;
 
 
 // Local Function Prototypes
@@ -59,12 +61,12 @@ int initCreateTasks(void);
 #define SWITCH_POLL_PRIORITY		1
 #define LCD_PRIORITY				2
 #define LED_CTRL_PRIORITY			3
-//#define FREQ_CALC_PRIORITY			4
+#define PRVGADraw_Task_P      		4
 #define STABILITY_TASK_PRIORITY 	5
 #define LOAD_MANAGE_PRIORITY		6
 #define KEY_PRIORITY				7
 
-#define PRVGADraw_Task_P      4
+
 TaskHandle_t PRVGADraw;
 
 // Global Variables
@@ -77,10 +79,13 @@ uint8_t ledValueR = 0x0;
 uint8_t mode = MAINTAIN;
 
 int start_time;
+int start_time2;
 int printFlag = 0;
+int printFlag2 = 0;
+int dumbFlag = 0;
 int min = 100;
 int max = 0;
-int avg = 0;
+double avg = 0.0;
 //get 200ms wokring
 
 int stableFlag = 0;
@@ -226,18 +231,20 @@ void stability_task(void *pvParameter){
 		if((freqData[0] < freq_Threshold) || (freqData[1] > RoC_Threshold)){
 
 
-			start_time = xTaskGetTickCount();
+
 			stability = 0;
 //			printf("Unstable\n");
 
 
 			if(mode == STABLE){
+//				xQueueReset(Q_timestamp);
+				start_time = xTaskGetTickCount();
 				shed_loads();
 				mode = LOADMANAGE;
 				xTimerReset(timer500,0);
-				xSemaphoreGive(LEDaphore);
 				printFlag = 1;
 				xQueueSend(Q_timestamp, &start_time, 0);
+				xSemaphoreGive(LEDaphore);
 
 			}
 
@@ -279,7 +286,7 @@ void load_manage_task(void *pvParameter){
 		// recieve data from queue
 		xQueueReceive(Q_stability,&rec_stability,0);
 //		xQueueReset(Q_timestamp);
-
+		start_time2 = xTaskGetTickCount();
 		// update saveSwitch for when swithces turned off
 		saveSwitch = (IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & saveSwitch);
 		// update red LED value
@@ -291,14 +298,25 @@ void load_manage_task(void *pvParameter){
 
 			// if the mode is stable, but state is unstable, change mode
 			if(mode == STABLE){
-				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+//				xQueueReset(Q_timestamp2);
+
+
 				mode = LOADMANAGE;
-				stableFlag = 0;
+				shed_loads();
+				xTimerReset(timer500,0);
+				xQueueReset(Q_timestamp2);
+				xQueueSend(Q_timestamp2, &start_time2, 0);
+				xSemaphoreGive(LEDaphore);
+				//vTaskDelay(10);
+				dumbFlag = 1;
+				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+			}else{
+				// shed loads when unstable
+				shed_loads();
+				// give semaphore to led control
+				xSemaphoreGive(LEDaphore);
 			}
-			// shed loads when unstable
-			shed_loads();
-			// give semaphore to led control
-			xSemaphoreGive(LEDaphore);
+
 
 			// get time after load shed
 //			end_time = xTaskGetTickCount();
@@ -312,10 +330,10 @@ void load_manage_task(void *pvParameter){
 
 
 			if (check_loads()){
-				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+//				saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
+				mode=STABLE;
 				ledValueR = saveSwitch;
 				xQueueReset(Q_switch_state);
-				mode=STABLE;
 				stableFlag = 1;
 //				printf("Mode is STABLE\n");
 			}else{
@@ -423,8 +441,8 @@ uint8_t check_loads(){
 	if(ledValueG == 0){
 
 		//update saveSwitch
-		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
-		rec_stab_copy = 2;
+//		mode=STABLE;
+		saveSwitch = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 		return 1;
 	} else{
 
@@ -453,9 +471,12 @@ void led_control_task(void *pvParameter){
 	// initialise variable to receive switch state
 	uint8_t rec_switchState;
 	int end_time;
+	int end_time2;
 	int rec_start_time;
+	int rec_start_time2;
 	int d_time;
 	int l = 0;
+	int k = 5;
 
 	while(1){
 
@@ -476,15 +497,15 @@ void led_control_task(void *pvParameter){
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,ledValueR);
 			 ledValueG = ledValueG & IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE);
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE, (ledValueG));
-
+			end_time = xTaskGetTickCount();
 			if(printFlag){
-				end_time = xTaskGetTickCount();
+
 				xQueueReceive(Q_timestamp, &rec_start_time,0);
 				d_time = end_time - rec_start_time;
-//				printf("D Time %d\n",d_time);
+
 				printFlag = 0;
-				resp_t[k] = d_time;
-				k = ++k%5;
+				resp_t[k%5] = d_time;
+				k = ++k;
 
 				if(d_time < min){
 					min = d_time;
@@ -493,11 +514,35 @@ void led_control_task(void *pvParameter){
 				if(d_time > max){
 					max = d_time;
 				}
+
+				xQueueSend(Q_d_time, resp_t, 0);
+				printFlag2 = 1;
+
+			}else if(dumbFlag){
+
+				xQueueReceive(Q_timestamp2, &rec_start_time2,0);
+				vTaskDelay(10);
+				end_time2 = xTaskGetTickCount();
+				d_time = end_time2 - rec_start_time2;
+				printf("Start: %d\n",rec_start_time2);
+				printf("End: %d\n",end_time2);
+				dumbFlag = 0;
+				resp_t[k%5] = d_time;
+				k = ++k;
+
+				if(d_time < min){
+					min = d_time;
+				}
+
+				if(d_time > max){
+					max = d_time;
+				}
+
+				xQueueSend(Q_d_time, resp_t, 0);
+				printFlag2 = 1;
 			}
-			for(l = 0; l < 5; l++){
-				printf("%d ", resp_t[l]);
-			}
-			printf("\n");
+
+
 
 		}
 	}
@@ -621,12 +666,13 @@ void PRVGADraw_Task(void *pvParameters ){
 	char freq_S[10], roc_S[10];
 	double freq[100], dfreq[100], freqData[2];
 
-	int i = 99, j = 0;
+	int i = 99, j = 0, x = 0;
+	int resp_t[5];
 
 	Line line_freq, line_roc;
 
 	while(1){
-
+		avg = 0;
 
 		// receive frequwncy data from freq_relay()
 		xQueueReceive(Q_freq_calc, freq+i, portMAX_DELAY);
@@ -644,6 +690,7 @@ void PRVGADraw_Task(void *pvParameters ){
 		// store frequency
 		freqData[0] = freq[i];
 		// store RoC of frequency
+		dfreq[i] = sqrt(dfreq[i]*dfreq[i]);
 		freqData[1] = dfreq[i];
 
 //			printf("Freq: %f\n",freq[i]);
@@ -653,11 +700,22 @@ void PRVGADraw_Task(void *pvParameters ){
 
 		i =	++i%100 ; //point to the next data (oldest) to be overwritten
 
+		if(printFlag2){
 
+			xQueueReceive(Q_d_time, resp_t, 0);
+			for(x = 0; x < 5; x++){
+				printf("%d ", resp_t[x]);
+				avg += resp_t[x];
+			}
+			avg = avg/5.0;
+			printf("\n");
+
+			printFlag2 = 0;
+		}
 
 		//clear old graph to draw new graph
-		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, 0, 0);
-		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 201, 639, 299, 0, 0);
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, (0xf << 20) + (0xf << 10) + 0xf, 0);
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 201, 639, 299, (0xf << 20) + (0xf << 10) + 0xf, 0);
 
 		time = xTaskGetTickCount();
 		sprintf(time_C, "%d",time);
@@ -693,6 +751,8 @@ void PRVGADraw_Task(void *pvParameters ){
 
 					line_roc.x2 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * (j + 1);
 					line_roc.y2 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j+1)%100]);
+
+
 
 					//Draw
 					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_freq.x1, line_freq.y1, line_freq.x2, line_freq.y2, 0x3ff << 0, 0);
@@ -775,11 +835,13 @@ int initOSDataStructs(void)
 	Q_stability = xQueueCreate(10, sizeof(uint8_t));
 	Q_key = xQueueCreate(10, sizeof(unsigned char));
 	Q_timestamp = xQueueCreate(10, sizeof(int));
-//	Q_d_time = xQueueCreate(1, sizeof(int));
+	Q_timestamp2 = xQueueCreate(10, sizeof(int));
+	Q_d_time = xQueueCreate(1, (sizeof(int)*5));
 
 	stablephore = xSemaphoreCreateBinary();
 	LEDaphore = xSemaphoreCreateBinary();
 	chronophore = xSemaphoreCreateBinary();
+	endaphore = xSemaphoreCreateBinary();
 	return 0;
 }
 
@@ -792,7 +854,7 @@ int initCreateTasks(void)
 
 	xTaskCreate(switch_poll_task, "switch_poll_task", TASK_STACKSIZE, NULL, SWITCH_POLL_PRIORITY, NULL);
 	xTaskCreate(led_control_task, "led_control_task", TASK_STACKSIZE, NULL, LED_CTRL_PRIORITY, NULL);
-	xTaskCreate(lcd_task, "lcd_task", TASK_STACKSIZE, NULL, LCD_PRIORITY, NULL);
+//	xTaskCreate(lcd_task, "lcd_task", TASK_STACKSIZE, NULL, LCD_PRIORITY, NULL);
 	xTaskCreate(key_task, "key_task", TASK_STACKSIZE, NULL, KEY_PRIORITY, NULL);
 
 	xTaskCreate( PRVGADraw_Task, "DrawTsk", configMINIMAL_STACK_SIZE, NULL, PRVGADraw_Task_P, &PRVGADraw );
