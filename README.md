@@ -12,7 +12,7 @@
 
 ### Project Setup
 1. Using the <b> Programmer (Quartus Prime 18.1)</b> application, program the DE2-115 board using the <b><em>freq_relay_controller.sof</em></b> found in the <b><em>COMPSYS723 2021 FreeRTOS Resources.zip</em></b> provided on Canvas.
-2. Open <b>Nios II Software Build Tools for Eclipse(Quartus Prime 18.1)</b> and create a workspace on D: drive.
+2. Open <b>Nios II Software Build Tools for Eclipse(Quartus Prime 13.0)</b> and create a workspace on D: drive.
 3. Select <b><em>File -> New -> Nios II Application and BSP From Template</em></b>
 4. Specify the .sopcinfo file using the provided <b><em>nios2.sopcinfo</em></b> file found on Canvas.
 5. Give the project an appropriate name.
