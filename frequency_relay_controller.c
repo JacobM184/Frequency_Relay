@@ -23,7 +23,7 @@
 #define LOADMANAGE				0
 
 int time;
-char time_C[10];
+char time_C[30];
 
 
 //lcd
@@ -32,7 +32,7 @@ FILE *lcd;
 #define   TASK_STACKSIZE       2048
 
 
-double freq_Threshold = 49;
+int freq_Threshold = 49;
 double RoC_Threshold = 10;
 
 QueueHandle_t Q_freq_calc;
@@ -83,7 +83,7 @@ int start_time2;
 int printFlag = 0;
 int printFlag2 = 0;
 int dumbFlag = 0;
-int min = 100;
+int min = 99;
 int max = 0;
 double avg = 0.0;
 //get 200ms wokring
@@ -92,7 +92,7 @@ int stableFlag = 0;
 int loadFlag;
 int shedCount=0;
 int prevMode = MAINTAIN;
-int resp_t[5];
+int resp_t[5] = {0,0,0,0,0};
 
 //Copies
 uint8_t rec_stab_copy;
@@ -141,7 +141,7 @@ void button_isr(){
 	if (mode == MAINTAIN){
 		prevMode = MAINTAIN;
 		mode = STABLE;
-		printf("MODE: %d\n",mode);
+		//printf("MODE: %d\n",mode);
 		loadFlag = 1;
 		// start timer to being load management
 		xTimerStartFromISR(timer500,0);
@@ -160,7 +160,7 @@ void button_isr(){
 		mode = MAINTAIN;
 
 		loadFlag = 0;
-		printf("MODE: %d\n",mode);
+		//printf("MODE: %d\n",mode);
 
 		// stop the timer
 		xTimerStopFromISR(timer500,0);
@@ -185,15 +185,15 @@ void ps2_isr (void* context, alt_u32 id)
     switch ( decode_mode )
     {
       case KB_ASCII_MAKE_CODE :
-//        printf ( "ASCII   : %x\n", key );
+//        //printf ( "ASCII   : %x\n", key );
         break ;
 
       case KB_BINARY_MAKE_CODE :
-//        printf ( "MAKE CODE : %x\n", key );
+//        //printf ( "MAKE CODE : %x\n", key );
         break ;
 
       default :
-//        printf ( "DEFAULT   : %x\n", key );
+//        //printf ( "DEFAULT   : %x\n", key );
         break ;
     }
     IOWR(SEVEN_SEG_BASE,0 ,key);
@@ -233,7 +233,7 @@ void stability_task(void *pvParameter){
 
 
 			stability = 0;
-//			printf("Unstable\n");
+//			//printf("Unstable\n");
 
 
 			if(mode == STABLE){
@@ -249,12 +249,12 @@ void stability_task(void *pvParameter){
 			}
 
 		}else{
-//			printf("Stable\n");
+//			//printf("Stable\n");
 			stability = 1;
 			xQueueReset(Q_timestamp);
 		}
 
-//		printf("Stab: %d\n",stability);
+//		//printf("Stab: %d\n",stability);
 
 		// reset timer on stability stae change
 		if((stability != prevStability) && (mode != MAINTAIN)){
@@ -294,7 +294,7 @@ void load_manage_task(void *pvParameter){
 		// check value of stability state
 		rec_stab_copy = rec_stability;
 		if (rec_stability == 0){
-//			printf("Unstable\n");
+//			//printf("Unstable\n");
 
 			// if the mode is stable, but state is unstable, change mode
 			if(mode == STABLE){
@@ -324,7 +324,7 @@ void load_manage_task(void *pvParameter){
 
 		} else {
 
-//			printf("Getting stable\n");
+//			//printf("Getting stable\n");
 			 //check if all loads are connected when stable state
 
 
@@ -335,7 +335,7 @@ void load_manage_task(void *pvParameter){
 				ledValueR = saveSwitch;
 				xQueueReset(Q_switch_state);
 				stableFlag = 1;
-//				printf("Mode is STABLE\n");
+//				//printf("Mode is STABLE\n");
 			}else{
 
 				// reconnect loads if all loads not reconnected
@@ -488,7 +488,7 @@ void led_control_task(void *pvParameter){
 //			rec_switchState = IORD_ALTERA_AVALON_PIO_DATA(SLIDE_SWITCH_BASE) & 0x1F;
 			// update Red LEDS
 			IOWR_ALTERA_AVALON_PIO_DATA(RED_LEDS_BASE,rec_switchState);
-//			printf("LED R led ctrl %d\n",rec_switchState);
+//			//printf("LED R led ctrl %d\n",rec_switchState);
 
 			// turn off Green LEDs
 			IOWR_ALTERA_AVALON_PIO_DATA(GREEN_LEDS_BASE,0x0);
@@ -524,8 +524,8 @@ void led_control_task(void *pvParameter){
 				vTaskDelay(10);
 				end_time2 = xTaskGetTickCount();
 				d_time = end_time2 - rec_start_time2;
-				printf("Start: %d\n",rec_start_time2);
-				printf("End: %d\n",end_time2);
+				//printf("Start: %d\n",rec_start_time2);
+				//printf("End: %d\n",end_time2);
 				dumbFlag = 0;
 				resp_t[k%5] = d_time;
 				k = ++k;
@@ -548,26 +548,6 @@ void led_control_task(void *pvParameter){
 	}
 
 
-}
-
-void lcd_task(void *pvParameter){
-
-	// open LCD file in write mode
-	lcd = fopen(CHARACTER_LCD_NAME, "w");
-
-	while (1){
-
-		// clear display
-		#define ESC 27
-        #define CLEAR_LCD_STRING "[2J"
-        fprintf(lcd, "%c%s", ESC, CLEAR_LCD_STRING);
-
-		// print mode
-        fprintf(lcd, "Mode: %d\n", mode);
-
-		// delay to stop flickering
-        vTaskDelay(100);
-	}
 }
 
 void key_task(void *pvParameter){
@@ -609,8 +589,8 @@ void key_task(void *pvParameter){
 
 
 			// output new frequenct and RoC thresholds
-			printf("Freq: %f\n", freq_Threshold);
-			printf("RoC: %f\n", RoC_Threshold);
+			//printf("Freq: %f\n", freq_Threshold);
+			//printf("RoC: %f\n", RoC_Threshold);
 		}
 	}
 }
@@ -624,14 +604,14 @@ void PRVGADraw_Task(void *pvParameters ){
 	alt_up_pixel_buffer_dma_dev *pixel_buf;
 	pixel_buf = alt_up_pixel_buffer_dma_open_dev(VIDEO_PIXEL_BUFFER_DMA_NAME);
 	if(pixel_buf == NULL){
-		printf("can't find pixel buffer device\n");
+		//printf("can't find pixel buffer device\n");
 	}
 	alt_up_pixel_buffer_dma_clear_screen(pixel_buf, 0);
 
 	alt_up_char_buffer_dev *char_buf;
 	char_buf = alt_up_char_buffer_open_dev("/dev/video_character_buffer_with_dma");
 	if(char_buf == NULL){
-		printf("can't find char buffer device\n");
+		//printf("can't find char buffer device\n");
 	}
 	alt_up_char_buffer_clear(char_buf);
 
@@ -657,17 +637,12 @@ void PRVGADraw_Task(void *pvParameters ){
 	alt_up_char_buffer_string(char_buf, "-60", 9, 36);
 
 
-	alt_up_char_buffer_string(char_buf, "Freq Thresh:", 40, 48);
-	alt_up_char_buffer_string(char_buf, "RoC Thresh: ", 40, 56);
 
-	alt_up_char_buffer_string(char_buf, "System Run Time:", 8, 48);
-	alt_up_char_buffer_string(char_buf, "Stability:", 8, 56);
-
-	char freq_S[10], roc_S[10];
+	char freq_S[30], roc_S[30], recent[200], min_S[100],max_S[100],avg_S[100];
 	double freq[100], dfreq[100], freqData[2];
 
 	int i = 99, j = 0, x = 0;
-	int resp_t[5];
+	int resp_t[5] = {0,0,0,0,0};
 
 	Line line_freq, line_roc;
 
@@ -693,7 +668,7 @@ void PRVGADraw_Task(void *pvParameters ){
 		dfreq[i] = sqrt(dfreq[i]*dfreq[i]);
 		freqData[1] = dfreq[i];
 
-//			printf("Freq: %f\n",freq[i]);
+//			//printf("Freq: %f\n",freq[i]);
 
 		// send data
 		xQueueSend(Q_freq_data,freqData,0);
@@ -704,64 +679,81 @@ void PRVGADraw_Task(void *pvParameters ){
 
 			xQueueReceive(Q_d_time, resp_t, 0);
 			for(x = 0; x < 5; x++){
-				printf("%d ", resp_t[x]);
+				//printf("%d ", resp_t[x]);
 				avg += resp_t[x];
 			}
 			avg = avg/5.0;
-			printf("\n");
+			//printf("\n");
 
 			printFlag2 = 0;
 		}
 
-		//clear old graph to draw new graph
-		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, (0xf << 20) + (0xf << 10) + 0xf, 0);
-		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 201, 639, 299, (0xf << 20) + (0xf << 10) + 0xf, 0);
 
 		time = xTaskGetTickCount();
-		sprintf(time_C, "%d",time);
-		alt_up_char_buffer_string(char_buf, time_C, 25, 48);
+		time = time/1000;
+		sprintf(time_C,"Run Time (s): %d",time);
+		alt_up_char_buffer_string(char_buf, time_C, 8, 42);
 
-		sprintf(freq_S, "%f",freq_Threshold);
-		sprintf(roc_S, "%f",RoC_Threshold);
-		alt_up_char_buffer_string(char_buf, freq_S, 55, 48);
-		alt_up_char_buffer_string(char_buf, roc_S, 55, 56);
+		sprintf(freq_S,"Frequency Threshold: %d",freq_Threshold);
+		alt_up_char_buffer_string(char_buf, freq_S, 40, 40);
+
+		sprintf(roc_S,"RoC Threshold      : %.2f",RoC_Threshold);
+		alt_up_char_buffer_string(char_buf, roc_S, 40, 42);
+
+		sprintf(min_S,"Min Measurement    : %d",min);
+		alt_up_char_buffer_string(char_buf, min_S, 8, 46);
+
+		sprintf(max_S,"Max Measurement    : %d",max);
+		alt_up_char_buffer_string(char_buf, max_S, 8, 48);
+
+		sprintf(avg_S,"Avg Measurement    : %.2f", ((double)resp_t[0] + (double)resp_t[1] + (double)resp_t[2] + (double)resp_t[3] + (double)resp_t[4])/5.0);
+		alt_up_char_buffer_string(char_buf, avg_S, 8, 50);
+
+		sprintf(recent,"Response Times (ms): [%d, %d, %d, %d, %d]",resp_t[0],resp_t[1],resp_t[2],resp_t[3],resp_t[4]);
+		alt_up_char_buffer_string(char_buf, recent, 8, 52);
+
+		for(j=0;j<99;++j){ //i here points to the oldest data, j loops through all the data to be drawn on VGA
+			if (((int)(freq[(i+j)%100]) > MIN_FREQ) && ((int)(freq[(i+j+1)%100]) > MIN_FREQ)){
+				//Calculate coordinates of the two data points to draw a line in between
+				//Frequency plot
+				line_freq.x1 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * j;
+				line_freq.y1 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j)%100] - MIN_FREQ));
+
+				line_freq.x2 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * (j + 1);
+				line_freq.y2 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j+1)%100] - MIN_FREQ));
+
+				//Frequency RoC plot
+				line_roc.x1 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * j;
+				line_roc.y1 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j)%100]);
+
+				line_roc.x2 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * (j + 1);
+				line_roc.y2 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j+1)%100]);
+
+
+
+				//Draw
+				alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_freq.x1, line_freq.y1, line_freq.x2, line_freq.y2, ((0x3ff << 20) + (0x3ff)) << 0, 0);
+				alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_roc.x1, line_roc.y1, line_roc.x2, line_roc.y2, ((0x3ff << 20) + (0x3ff)) << 0, 0);
+			}
+		}
+
+		//clear old graph to draw new graph
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 0, 639, 199, 0, 0);
+		alt_up_pixel_buffer_dma_draw_box(pixel_buf, 101, 201, 639, 299, 0, 0);
 
 		if (mode != MAINTAIN){
 			if (rec_stab_copy == 0){
-				alt_up_char_buffer_string(char_buf, "Unstable      ", 19, 56);
+				alt_up_char_buffer_string(char_buf, "Status:Unstable      ", 8, 40);
 			} else if (rec_stab_copy == 1) {
-				alt_up_char_buffer_string(char_buf, "Getting Stable", 19, 56);
+				alt_up_char_buffer_string(char_buf, "Status:Getting Stable", 8, 40);
 			} else {
-				alt_up_char_buffer_string(char_buf, "Stable        ", 19, 56);
+				alt_up_char_buffer_string(char_buf, "Status:Stable        ", 8, 40);
 			}
 
-			for(j=0;j<99;++j){ //i here points to the oldest data, j loops through all the data to be drawn on VGA
-				if (((int)(freq[(i+j)%100]) > MIN_FREQ) && ((int)(freq[(i+j+1)%100]) > MIN_FREQ)){
-					//Calculate coordinates of the two data points to draw a line in between
-					//Frequency plot
-					line_freq.x1 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * j;
-					line_freq.y1 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j)%100] - MIN_FREQ));
 
-					line_freq.x2 = FREQPLT_ORI_X + FREQPLT_GRID_SIZE_X * (j + 1);
-					line_freq.y2 = (int)(FREQPLT_ORI_Y - FREQPLT_FREQ_RES * (freq[(i+j+1)%100] - MIN_FREQ));
-
-					//Frequency RoC plot
-					line_roc.x1 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * j;
-					line_roc.y1 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j)%100]);
-
-					line_roc.x2 = ROCPLT_ORI_X + ROCPLT_GRID_SIZE_X * (j + 1);
-					line_roc.y2 = (int)(ROCPLT_ORI_Y - ROCPLT_ROC_RES * dfreq[(i+j+1)%100]);
-
-
-
-					//Draw
-					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_freq.x1, line_freq.y1, line_freq.x2, line_freq.y2, 0x3ff << 0, 0);
-					alt_up_pixel_buffer_dma_draw_line(pixel_buf, line_roc.x1, line_roc.y1, line_roc.x2, line_roc.y2, 0x3ff << 0, 0);
-				}
-			}
 
 		} else {
-				alt_up_char_buffer_string(char_buf, "In Maintenance", 19, 56);
+				alt_up_char_buffer_string(char_buf, "Status:In Maintenance", 8, 40);
 		}
 
 
@@ -794,7 +786,7 @@ int main(int argc, char* argv[], char* envp[])
 	alt_up_ps2_dev * ps2_device = alt_up_ps2_open_dev(PS2_NAME);
 
 	if(ps2_device == NULL){
-		printf("can't find PS/2 device\n");
+		//printf("can't find PS/2 device\n");
 		return 1;
 	}
 
