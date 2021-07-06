@@ -1,4 +1,4 @@
-# COMPSYS 723 Assignment 1 - Group 10
+# Group 10
 
 # Setup Instructions
 
